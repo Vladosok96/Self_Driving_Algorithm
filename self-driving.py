@@ -790,6 +790,9 @@ class VECTOR2:
     def __add__(self, other):
         return VECTOR2(self.x + other.x, self.y + other.y)
 
+    def __repr__(self):
+        return f"x: {self.x}, y: {self.y}"
+
 
 class CAMERA:
     def __init__(self, position=POINT(0, 0, 0)):
@@ -926,12 +929,12 @@ layout = [  [sg.Text('Автомобиль')],
             [sg.Text('Длина'), sg.InputText(default_text=max_c)],
             [sg.HorizontalSeparator()],
             [sg.Text('Алгоритм следования')],
-            [sg.Text('Соотношение векторов'), sg.Slider(orientation='h', range=(0, 1), resolution=0.05, default_value=0.5)],
-            [sg.Text('Коэффициент поворота'), sg.InputText(default_text=STEERING_CF)],
+            [sg.Text('Соотношение значимости'), sg.Slider(orientation='h', range=(0, 1), resolution=0.05, default_value=0.5)],
+            [sg.Text('Коэффициент руления'), sg.InputText(default_text=STEERING_CF)],
             [sg.HorizontalSeparator()],
             [sg.Text('Алгоритм построения пути')],
-            [sg.Text('Скругление'), sg.InputText(default_text=max_c)],
-            [sg.Text('Шаг'), sg.InputText(default_text=STEP_SIZE)],
+            [sg.Text('Минимальный радиус'), sg.InputText(default_text=max_c)],
+            [sg.Text('Шаг дискретизации'), sg.InputText(default_text=STEP_SIZE)],
             [sg.Button('Ok'), sg.Button('Cancel')] ]
 
 
@@ -1138,7 +1141,7 @@ while runGame:
     point_right = POINT(player.position.x + math.cos(to_radians(player.position.angle - 90)) * 1000,
                         player.position.y + math.sin(to_radians(player.position.angle - 90)) * 1000)
 
-    if (time() - last_add_way > 0.2):
+    if (time() - last_add_way > 0.1):
         way.append(POINT(player.position.x, player.position.y))
         last_add_way = time()
     for i in range(1, len(way)):
@@ -1262,11 +1265,17 @@ while runGame:
                 is_reverse = True
 
             destination_vector = None
-            if len(high_destinations) > 1:
+            if len(high_destinations) > 10:
                 # Векторы, указывающие на напрвления до следующих точек
                 first_point_vector = VECTOR2(high_destinations[0].x - player.position.x, high_destinations[0].y - player.position.y)
-                second_point_vector = VECTOR2(high_destinations[0].x - high_destinations[1].x, high_destinations[0].y - high_destinations[1].y)
-                destination_vector = (first_point_vector.mult(FIRST_POINT_CF) + second_point_vector.mult(1 - FIRST_POINT_CF)).mult(0.5)
+                second_point_vector = VECTOR2(high_destinations[10].x - high_destinations[0].x, high_destinations[0].y - high_destinations[10].y)
+                print("1first", first_point_vector, "1second", second_point_vector)
+                destination_vector = (first_point_vector.mult(FIRST_POINT_CF) + second_point_vector.mult(1 - FIRST_POINT_CF))
+                print("2first", first_point_vector.mult(FIRST_POINT_CF), "2second", second_point_vector.mult(1 - FIRST_POINT_CF))
+                print("destination1", destination_vector)
+                destination_vector = destination_vector.mult(0.5)
+                # print("destination2", destination_vector)
+
             else:
                 destination_vector = VECTOR2(high_destinations[0].x - player.position.x, high_destinations[0].y - player.position.y)
 
