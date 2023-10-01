@@ -7,12 +7,13 @@ from time import time
 
 
 # parameters initiation
-max_c = 0.007  # max curvature
+max_c = 0.006  # max curvature
 STEP_SIZE = 1
 MAX_LENGTH = 10.0
 PI = math.pi
-FIRST_POINT_CF = 0.7
-STEERING_CF = 1
+FIRST_POINT_CF = 0.75
+STEERING_CF = 2.5
+NEXT_POINT_OFFSET = 20
 
 
 # class for PATH element
@@ -874,7 +875,8 @@ departure = POINT(0, 0, 0)
 destination_angle = 0
 pygame.font.init()
 heading_font = pygame.font.SysFont("Arial", 20)
-current_vector_point = None # start direction vector
+current_vector_point = None     # Start direction vector
+current_wall_point = None       # Wall first point
 
 # пременные
 fps = 60
@@ -883,11 +885,11 @@ camera = CAMERA(POINT(0, 0, 0))
 show_lines = 1
 
 # карта стен
-walls = [STRAIGHT(203, 170, 355, 104)]
+walls = []
 
 # Путь
 last_add_way = 0
-way = [POINT(player.position.x, player.position.y), POINT(player.position.x, player.position.y)]
+way = []
 
 
 def research_destinations():
@@ -902,8 +904,6 @@ def research_destinations():
                                          player.position.y,
                                          angle=np.deg2rad(player.position.angle + 90),
                                          direction=-1))
-
-    print(STEP_SIZE)
 
     for i in range(len(tmp_low_destintaions) - 1):
         s_x = tmp_low_destintaions[i].x
@@ -931,6 +931,7 @@ layout = [  [sg.Text('Автомобиль')],
             [sg.Text('Алгоритм следования')],
             [sg.Text('Соотношение значимости'), sg.Slider(orientation='h', range=(0, 1), resolution=0.05, default_value=0.5)],
             [sg.Text('Коэффициент руления'), sg.InputText(default_text=STEERING_CF)],
+            [sg.Text('Дальность второй точки'), sg.Slider(orientation='h', range=(2, 50), resolution=1, default_value=NEXT_POINT_OFFSET)],
             [sg.HorizontalSeparator()],
             [sg.Text('Алгоритм построения пути')],
             [sg.Text('Минимальный радиус'), sg.InputText(default_text=max_c)],
@@ -944,35 +945,38 @@ def CAD_window():
     global STEP_SIZE
     global FIRST_POINT_CF
     global STEERING_CF
+    global NEXT_POINT_OFFSET
     window = sg.Window('Система проектирования БПТС', layout)
-    last_update = {}
+    last_update = {0: '0', 1: '0', 3: '0', 4: '0', 5: '0', 7: '0', 8: '0'}
 
     while runGame:
-        event, values = window.read(timeout=500)
+        event, values = window.read(timeout=100)
         if event == sg.WIN_CLOSED or event == 'Cancel':  # if user closes window or clicks cancel
             runGame = False
             break
-        if last_update != values:
-            print('You entered ', values)
 
-            FIRST_POINT_CF = float(values[3])
-            try:
-                if float(values[4]) > 0:
-                    STEERING_CF = float(values[4])
-            except:
-                pass
-            try:
-                if float(values[6]) > 0:
-                    max_c = float(values[6])
-            except:
-                pass
-            try:
-                if float(values[7]) != 0:
-                    STEP_SIZE = float(values[7])
-            except:
-                pass
+        FIRST_POINT_CF = float(values[3])
+        try:
+            if float(values[4]) > 0:
+                STEERING_CF = float(values[4])
+        except:
+            pass
+        NEXT_POINT_OFFSET = int(values[5])
+        try:
+            if float(values[7]) > 0:
+                max_c = float(values[7])
+        except:
+            pass
+        try:
+            if float(values[8]) != 0:
+                STEP_SIZE = float(values[8])
+        except:
+            pass
+
+        if last_update[7] != values[7] or last_update[8] != values[8]:
             research_destinations()
             last_update = values
+            print(values)
 
 
 CAD_window_task = threading.Thread(target=CAD_window, args=())
@@ -987,17 +991,15 @@ while runGame:
                 is_reverse = False
                 current_vector_point = POINT(pygame.mouse.get_pos()[0] - camera.position.x,
                                              pygame.mouse.get_pos()[1] - camera.position.y, direction = 1)
-                
+
                 departure = POINT(player.position.x, player.position.y, 0)
             if event.button == 2:
                 destinations.clear()
                 high_destinations.clear()
                 is_achieved = True
             if event.button == 3:
-                is_reverse = True
-                destinations.append(POINT(pygame.mouse.get_pos()[0] - camera.position.x,
-                                          pygame.mouse.get_pos()[1] - camera.position.y, direction = -1))
-                departure = POINT(player.position.x, player.position.y, 0)
+                current_wall_point = POINT(pygame.mouse.get_pos()[0] - camera.position.x,
+                                           pygame.mouse.get_pos()[1] - camera.position.y, direction=1)
 
         if event.type == pygame.MOUSEBUTTONUP:
             if event.button == 1:
@@ -1006,7 +1008,13 @@ while runGame:
                                                                       current_vector_point.y - (pygame.mouse.get_pos()[1] - camera.position.y)))
                     destinations.append(current_vector_point)
                     current_vector_point = None
-
+            if event.button == 3:
+                if current_wall_point != None:
+                    walls.append(STRAIGHT(current_wall_point.x,
+                                          current_wall_point.y,
+                                          pygame.mouse.get_pos()[0] - camera.position.x,
+                                          pygame.mouse.get_pos()[1] - camera.position.y))
+                    current_wall_point = None
 
         if event.type == pygame.KEYDOWN:
             if event.key == 99:
@@ -1020,6 +1028,10 @@ while runGame:
                     show_lines = 0
                 else:
                     show_lines += 1
+            elif event.key == 122:
+                walls = []
+            elif event.key == 98:
+                way = []
             elif event.key == 100:
                 player.is_d = True
             elif event.key == 97:
@@ -1212,6 +1224,12 @@ while runGame:
                              [pygame.mouse.get_pos()[0],
                               pygame.mouse.get_pos()[1]], 3)
 
+    if current_wall_point != None:
+            pygame.draw.line(screen, pygame.Color(0, 255, 100),
+                             [current_wall_point.x + camera.position.x, current_wall_point.y + camera.position.y],
+                             [pygame.mouse.get_pos()[0],
+                              pygame.mouse.get_pos()[1]], 3)
+
     if (show_lines == 1 or show_lines == 2):
         # pygame.draw.line(screen, pygame.Color(0, 255, 0),
         #                  [player.position.x + camera.position.x, player.position.y + camera.position.y],
@@ -1265,19 +1283,20 @@ while runGame:
                 is_reverse = True
 
             destination_vector = None
-            if len(high_destinations) > 10:
+            if len(high_destinations) > NEXT_POINT_OFFSET:
                 # Векторы, указывающие на напрвления до следующих точек
                 first_point_vector = VECTOR2(high_destinations[0].x - player.position.x, high_destinations[0].y - player.position.y)
-                second_point_vector = VECTOR2(high_destinations[10].x - high_destinations[0].x, high_destinations[0].y - high_destinations[10].y)
-                print("1first", first_point_vector, "1second", second_point_vector)
+                second_point_vector = VECTOR2(high_destinations[NEXT_POINT_OFFSET].x - high_destinations[0].x, high_destinations[NEXT_POINT_OFFSET].y - high_destinations[0].y)
                 destination_vector = (first_point_vector.mult(FIRST_POINT_CF) + second_point_vector.mult(1 - FIRST_POINT_CF))
-                print("2first", first_point_vector.mult(FIRST_POINT_CF), "2second", second_point_vector.mult(1 - FIRST_POINT_CF))
-                print("destination1", destination_vector)
                 destination_vector = destination_vector.mult(0.5)
-                # print("destination2", destination_vector)
+                pygame.draw.circle(screen, pygame.Color(255, 0, 0),
+                                   (high_destinations[NEXT_POINT_OFFSET].x + camera.position.x, high_destinations[NEXT_POINT_OFFSET].y + camera.position.y), 5.0)
 
             else:
                 destination_vector = VECTOR2(high_destinations[0].x - player.position.x, high_destinations[0].y - player.position.y)
+            pygame.draw.circle(screen, pygame.Color(0, 255, 0),
+                               (high_destinations[0].x + camera.position.x,
+                                high_destinations[0].y + camera.position.y), 5.0)
 
             # Угол между этим вектором и курсом автомобиля
             destination_angle = destination_vector.AngleOfVectors(destination_vector, angle_vector)
@@ -1285,7 +1304,7 @@ while runGame:
             if VECTOR2(player.position.x - high_destinations[0].x, player.position.y - high_destinations[0].y).get_length() > 50:
                 research_destinations()
 
-            while not is_achieved and VECTOR2(player.position.x - high_destinations[0].x, player.position.y - high_destinations[0].y).get_length() < 20:
+            while not is_achieved and VECTOR2(player.position.x - high_destinations[0].x, player.position.y - high_destinations[0].y).get_length() < 10:
                 high_destinations.pop(0)
                 departure = POINT(player.position.x, player.position.y, 0)
                 if len(high_destinations) == 0:
