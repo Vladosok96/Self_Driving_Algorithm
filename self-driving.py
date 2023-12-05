@@ -5,8 +5,12 @@ import PySimpleGUI as sg
 import threading
 from time import time
 import ReedsShepp
-import qlearning
+# import qlearning
 
+import tensorflow as tf
+from keras.models import Sequential
+from keras.layers import Dense
+from keras.optimizers import Adam
 
 def det(arr):
     return (arr[0][0] * arr[1][1]) - (arr[0][1] * arr[1][0])
@@ -121,6 +125,11 @@ class VECTOR2:
             angle += turn
         return angle
 
+    def rotate(self, radians):
+        x_prime = self.x * math.cos(radians) - self.y * math.sin(radians)
+        y_prime = self.x * math.sin(radians) + self.y * math.cos(radians)
+        return VECTOR2(x_prime, y_prime)
+
     def mult(self, scalar):
         return VECTOR2(self.x * scalar, self.y * scalar)
 
@@ -217,9 +226,56 @@ heading_font = pygame.font.SysFont("Arial", 20)
 current_vector_point = None     # Start direction vector
 current_wall_point = None       # Wall first point
 
+
 # Машинное обучение
-n_actions = 2
-agent = qlearning.QLearningAgent(n_actions)
+class QLearningCar:
+    def __init__(self, state_size, action_size, learning_rate=0.001, discount_factor=0.99, exploration_rate=1.0, exploration_decay=0.995, exploration_min=0.01):
+        self.state_size = state_size
+        self.action_size = action_size
+        self.learning_rate = learning_rate
+        self.discount_factor = discount_factor
+        self.exploration_rate = exploration_rate
+        self.exploration_decay = exploration_decay
+        self.exploration_min = exploration_min
+        self.memory = []
+        self.build_model()
+
+    def build_model(self):
+        self.model = Sequential()
+        self.model.add(Dense(24, input_dim=self.state_size, activation='relu'))
+        self.model.add(Dense(24, activation='relu'))
+        self.model.add(Dense(self.action_size, activation='linear'))
+        self.model.compile(loss='mse', optimizer=Adam(lr=self.learning_rate))
+
+    def act(self, state):
+        if np.random.rand() <= self.exploration_rate:
+            return np.random.uniform(-1, 1, self.action_size)
+        q_values = self.model.predict(state)
+        return q_values[0]
+
+    def remember(self, state, action, reward, next_state, done):
+        self.memory.append((state, action, reward, next_state, done))
+
+    def replay(self, batch_size):
+        if len(self.memory) < batch_size:
+            return
+        minibatch = np.random.choice(self.memory, batch_size, replace=False)
+        for state, action, reward, next_state, done in minibatch:
+            target = reward
+            if not done:
+                target = reward + self.discount_factor * np.amax(self.model.predict(next_state)[0])
+            target_f = self.model.predict(state)
+            target_f[0] = action * target
+            self.model.fit(state, target_f, epochs=1, verbose=0)
+        if self.exploration_rate > self.exploration_min:
+            self.exploration_rate *= self.exploration_decay
+
+
+state_size = 4  # координаты целевой точки (x, y), скорость и угол поворота руля
+action_size = 2  # целевой угол поворота руля и целевая скорость
+batch_size = 32
+# Создаем экземпляр Q-обучения
+agent = QLearningCar(state_size, action_size)
 
 # пременные
 fps = 60
@@ -324,6 +380,50 @@ CAD_window_task.start()
 
 # отрисовка
 while runGame:
+
+    # Данные, относящиеся к Q-обучению
+    reward = 1.0
+    done = True
+
+    # Создание текущего состояния среды для модели Q-обучения
+    current_state = [0, 0, player.steering_angle, player.velocity]
+    if len(high_destinations) > 0:
+
+        # Рассчет вектора до точек
+        if len(high_destinations) > NEXT_POINT_OFFSET:
+            # Векторы, указывающие на напрвления до следующих точек
+            first_point_vector = VECTOR2(high_destinations[0].x - player.position.x,
+                                         high_destinations[0].y - player.position.y) \
+                .rotate(math.radians(player.position.angle))
+            second_point_vector = VECTOR2(high_destinations[NEXT_POINT_OFFSET].x - high_destinations[0].x,
+                                          high_destinations[NEXT_POINT_OFFSET].y - high_destinations[0].y) \
+                .rotate(math.radians(player.position.angle))
+
+            current_state[0] = second_point_vector.x
+            current_state[1] = second_point_vector.y
+            current_state = np.array(current_state)
+            current_state = np.reshape(current_state, [1, state_size])
+
+        done = False
+
+        # Проверка на сход с маршрута
+        if VECTOR2(player.position.x - high_destinations[0].x,
+                   player.position.y - high_destinations[0].y).get_length() > 50:
+            research_destinations()
+            reward -= 0.5
+
+        # Удаление достигнутых точек
+        if len(destinations) > 0:
+            while len(destinations) > 0 and VECTOR2(player.position.x - destinations[0].x, player.position.y - destinations[0].y).get_length() < 20:
+                destinations.pop(0)
+        while not is_achieved and VECTOR2(player.position.x - high_destinations[0].x,
+                                          player.position.y - high_destinations[0].y).get_length() < 10:
+            high_destinations.pop(0)
+            departure = POINT(player.position.x, player.position.y, 0)
+            reward += 0.05
+            if len(high_destinations) == 0:
+                is_achieved = True
+
     # Отслеживание событий для движения
     for event in pygame.event.get():
         if event.type == pygame.MOUSEBUTTONDOWN:
@@ -414,11 +514,16 @@ while runGame:
             elif event.key == 1073741905:
                 camera.is_down = False
 
+    # Рассчет действий для автомобиля
+    action = agent.act(current_state)
+    destination_angle = action[0]
+    velocity = action[1]
+
+
     # Применение событий для машины
     if not is_achieved:
         if not is_reverse:
-            if player.velocity < 5:
-                player.velocity += 1 * (1 / 2)
+            player.velocity = velocity
             player.steering_angle = max(min(destination_angle * STEERING_CF, 5), -5)
         else:
             if player.velocity > -2:
@@ -427,19 +532,11 @@ while runGame:
     else:
         if not is_reverse:
             if player.velocity > 1:
-                player.velocity -= 1 * (1 / 2)
+                player.velocity -= 0.5
         else:
             if player.velocity < 0:
-                player.velocity += 1 * (1 / 2)
+                player.velocity += 0.5
         player.steering_angle = 0
-    # if player.is_d and player.steering_angle <= 3.5:
-    #     player.steering_angle += 0.2 * (1 / 2)
-    # if player.is_a and player.steering_angle >= -3.5:
-    #     player.steering_angle -= 0.2 * (1 / 2)
-    # if player.steering_angle <= 3.5:
-    #     player.steering_angle += 0.2 * (1 / 2)
-    # if player.is_a and player.steering_angle >= -3.5:
-    #     player.steering_angle -= 0.2 * (1 / 2)
 
     # Применение событий для камеры
     if camera.is_left:
@@ -475,6 +572,30 @@ while runGame:
         player.steering_angle -= 0.1
     if (not player.is_a) and (not player.is_d) and player.steering_angle < 0:
         player.steering_angle += 0.1
+
+    # Рассчет следующего состояния
+    next_state = [0, 0, player.steering_angle, player.velocity]
+    if len(high_destinations) > NEXT_POINT_OFFSET:
+        # Векторы, указывающие на напрвления до следующих точек
+        first_point_vector = VECTOR2(high_destinations[0].x - player.position.x,
+                                     high_destinations[0].y - player.position.y) \
+            .rotate(math.radians(player.position.angle))
+        second_point_vector = VECTOR2(high_destinations[NEXT_POINT_OFFSET].x - high_destinations[0].x,
+                                      high_destinations[NEXT_POINT_OFFSET].y - high_destinations[0].y) \
+            .rotate(math.radians(player.position.angle))
+
+        next_state[0] = second_point_vector.x
+        next_state[1] = second_point_vector.y
+        next_state = np.array(current_state)
+        next_state = np.reshape(current_state, [1, state_size])
+
+    # Сохраняем опыт и обновляем модель
+    agent.remember(current_state, action, reward, next_state, done)
+
+    # Обучаем модель на случайном подмножестве опыта
+    # agent.replay(batch_size)
+
+
 
     screen.fill((200, 200, 200))
     blit_rotate(screen, trueno, (player.position.x + camera.position.x, player.position.y + camera.position.y),
@@ -570,24 +691,13 @@ while runGame:
                              [pygame.mouse.get_pos()[0],
                               pygame.mouse.get_pos()[1]], 3)
 
-    if (show_lines == 1 or show_lines == 2):
-        # pygame.draw.line(screen, pygame.Color(0, 255, 0),
-        #                  [player.position.x + camera.position.x, player.position.y + camera.position.y],
-        #                  [player.position.x + (player.vector.x * 10) + camera.position.x,
-        #                   player.position.y + (player.vector.y * 10) + camera.position.y], 3)
-
-        # pygame.draw.line(screen, pygame.Color(255, 0, 0),
-        #                  [player.position.x + camera.position.x, player.position.y + camera.position.y],
-        #                  [player.position.x + (direction_vector.x * 10) + camera.position.x,
-        #                   player.position.y + (direction_vector.y * 10) + camera.position.y], 3)
+    # Отрисовка линий путей
+    if show_lines == 1 or show_lines == 2:
 
         angle_vector = VECTOR2(math.cos(to_radians(player.position.angle)) * 10 * (1 / 2),
                                math.sin(to_radians(player.position.angle)) * 10 * (1 / 2))
-        # pygame.draw.line(screen, pygame.Color(255, 0, 0),
-        #                  [player.position.x + camera.position.x, player.position.y + camera.position.y],
-        #                  [player.position.x + (angle_vector.x * 20) + camera.position.x,
-        #                   player.position.y + (angle_vector.y * 20) + camera.position.y], 3)
 
+        # отрисовка низкодискретизированного пути
         if len(destinations) > 0:
             pygame.draw.line(screen, pygame.Color(255, 255, 0),
                              [player.position.x + camera.position.x, player.position.y + camera.position.y],
@@ -602,6 +712,7 @@ while runGame:
             while len(destinations) > 0 and VECTOR2(player.position.x - destinations[0].x, player.position.y - destinations[0].y).get_length() < 20:
                 destinations.pop(0)
 
+        # отрисовка высокодискретизированного пути
         if len(high_destinations) > 0:
             for destination_iterator in range(1, len(high_destinations)):
                 if high_destinations[destination_iterator].direction == 1:
@@ -616,53 +727,6 @@ while runGame:
                                       high_destinations[destination_iterator].y + camera.position.y],
                                      [high_destinations[destination_iterator - 1].x + camera.position.x,
                                       high_destinations[destination_iterator - 1].y + camera.position.y], 3)
-
-            if high_destinations[0].direction == 1:
-                is_reverse = False
-            else:
-                is_reverse = True
-
-            destination_vector = None
-            if len(high_destinations) > NEXT_POINT_OFFSET:
-                # Векторы, указывающие на напрвления до следующих точек
-                first_point_vector = VECTOR2(high_destinations[0].x - player.position.x, high_destinations[0].y - player.position.y)
-                second_point_vector = VECTOR2(high_destinations[NEXT_POINT_OFFSET].x - high_destinations[0].x, high_destinations[NEXT_POINT_OFFSET].y - high_destinations[0].y)
-                destination_vector = (first_point_vector.mult(FIRST_POINT_CF) + second_point_vector.mult(1 - FIRST_POINT_CF))
-                destination_vector = destination_vector.mult(0.5)
-                pygame.draw.circle(screen, pygame.Color(255, 0, 0),
-                                   (high_destinations[NEXT_POINT_OFFSET].x + camera.position.x, high_destinations[NEXT_POINT_OFFSET].y + camera.position.y), 5.0)
-
-            else:
-                destination_vector = VECTOR2(high_destinations[0].x - player.position.x, high_destinations[0].y - player.position.y)
-            pygame.draw.circle(screen, pygame.Color(0, 255, 0),
-                               (high_destinations[0].x + camera.position.x,
-                                high_destinations[0].y + camera.position.y), 5.0)
-
-            # Угол между этим вектором и курсом автомобиля
-            destination_angle = destination_vector.AngleOfVectors(destination_vector, angle_vector)
-
-            if VECTOR2(player.position.x - high_destinations[0].x, player.position.y - high_destinations[0].y).get_length() > 50:
-                research_destinations()
-
-            while not is_achieved and VECTOR2(player.position.x - high_destinations[0].x, player.position.y - high_destinations[0].y).get_length() < 10:
-                high_destinations.pop(0)
-                departure = POINT(player.position.x, player.position.y, 0)
-                if len(high_destinations) == 0:
-                    is_achieved = True
-
-        # pygame.draw.line(screen, pygame.Color(0, 160, 160),
-        #                  [destination.x + camera.position.x, destination.y + camera.position.y],
-        #                  [departure.x + camera.position.x, departure.y + camera.position.y], 3)
-
-        # label = heading_font.render(str(destination_vector.AngleOfVectors(destination_vector, angle_vector)), True, (50, 50, 50))
-        # label_rect = label.get_rect()
-        # label_rect.center = (130, 25)
-        # screen.blit(label, label_rect)
-        #
-        # label = heading_font.render(str(destination_vector.AngleOfVectors(destination_vector, departure_vector)), True, (50, 50, 50))
-        # label_rect = label.get_rect()
-        # label_rect.center = (130, 50)
-        # screen.blit(label, label_rect)
 
     pygame.draw.circle(screen, pygame.Color(255, 0, 0),
                        [destination.x + camera.position.x, destination.y + camera.position.y], 5)

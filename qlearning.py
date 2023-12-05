@@ -1,27 +1,41 @@
+import random
+
 import numpy as np
+import tensorflow as tf
+from keras import layers, models, optimizers
 
 
-# Класс для Q-обучения, специфичный для вашей задачи
-class QLearningAgent:
-    def __init__(self, n_actions, learning_rate=0.1, discount_factor=0.9, exploration_rate=0.1):
-        self.n_actions = n_actions
-        self.learning_rate = learning_rate
-        self.discount_factor = discount_factor
-        self.exploration_rate = exploration_rate
+class QNetwork(models.Model):
+    def __init__(self, state_size, action_size):
+        super(QNetwork, self).__init__()
+        self.dense1 = layers.Dense(64, activation='relu', input_shape=(state_size,))
+        self.dense2 = layers.Dense(64, activation='relu')
+        self.output_layer = layers.Dense(action_size, activation='linear')
 
-        # Создаем Q-таблицу и инициализируем ее случайными значениями
-        self.q_table = np.random.rand(n_actions)
+    def call(self, state):
+        x = self.dense1(state)
+        x = self.dense2(x)
+        q_values = self.output_layer(x)
+        return q_values
 
-    def choose_action(self, state):
-        # Принимаем случайное решение с вероятностью exploration_rate
-        if np.random.rand() < self.exploration_rate:
-            return np.random.choice(self.n_actions)
-        # В противном случае выбираем действие с максимальным Q-значением для данного состояния
-        return np.argmax(self.q_table)
 
-    def update_q_table(self, state, action, reward, next_state):
-        # Обновляем Q-значение в соответствии с формулой Q-обучения
-        old_value = self.q_table[action]
-        next_max = np.max(self.q_table)
-        new_value = (1 - self.learning_rate) * old_value + self.learning_rate * (reward + self.discount_factor * next_max)
-        self.q_table[action] = new_value
+def q_learning_train(model, target_model, gamma, batch_size, optimizer, replay_memory):
+    if len(replay_memory) < batch_size:
+        return
+
+    minibatch = np.array(random.sample(replay_memory, batch_size))
+    states = np.vstack(minibatch[:, 0])
+    actions = minibatch[:, 1].astype(int)
+    rewards = minibatch[:, 2]
+    next_states = np.vstack(minibatch[:, 3])
+    dones = minibatch[:, 4]
+
+    target = rewards + gamma * np.max(target_model.predict(next_states), axis=1) * (1 - dones)
+
+    with tf.GradientTape() as tape:
+        q_values = model(states)
+        selected_action_values = tf.reduce_sum(tf.one_hot(actions, model.output_shape[1]) * q_values, axis=1)
+        loss = tf.reduce_mean(tf.square(selected_action_values - target))
+
+    gradients = tape.gradient(loss, model.trainable_variables)
+    optimizer.apply_gradients(zip(gradients, model.trainable_variables))
