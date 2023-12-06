@@ -410,7 +410,7 @@ while runGame:
         if VECTOR2(player.position.x - high_destinations[0].x,
                    player.position.y - high_destinations[0].y).get_length() > 50:
             research_destinations()
-            reward -= 0.5
+            reward -= 1
 
         # Удаление достигнутых точек
         if len(destinations) > 0:
@@ -420,7 +420,7 @@ while runGame:
                                           player.position.y - high_destinations[0].y).get_length() < 10:
             high_destinations.pop(0)
             departure = POINT(player.position.x, player.position.y, 0)
-            reward += 0.05
+            reward += 0.1
             if len(high_destinations) == 0:
                 is_achieved = True
 
