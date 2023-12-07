@@ -23,15 +23,14 @@ class DQNAgent:
         model.compile(loss='mse', optimizer=optimizers.Adam(lr=self.learning_rate))
         return model
 
-    def remember(self, state, action, reward, next_state, done, batch_size):
+    def remember(self, state, action, reward, next_state, done):
         self.memory.append([state, action, reward, next_state, done])
-        # self.memory = self.memory[-batch_size:]
 
     def act(self, state):
         if np.random.rand() <= self.epsilon:
-            return np.random.randint(self.action_size)
+            return np.random.uniform(-1, 1, self.action_size)
         q_values = self.model.predict(np.array([state]))
-        return np.argmax(q_values[0])
+        return q_values[0]
 
     def replay(self, batch_size):
         if len(self.memory) < batch_size:
@@ -91,7 +90,7 @@ for episode in range(num_episodes):
                 next_state[1] = 1
 
         print("reward:", reward, "total_reward:", total_reward, "action", action, "state:", state)
-        agent.remember(state.copy(), action, reward, next_state.copy(), done, batch_size=32)
+        agent.remember(state.copy(), action, reward, next_state.copy(), done)
         state = next_state
         total_reward += reward
         if done:
