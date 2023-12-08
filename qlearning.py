@@ -1,41 +1,56 @@
-import random
-
 import numpy as np
-import tensorflow as tf
-from keras import layers, models, optimizers
+from keras import layers, models
+import functions
 
 
-class QNetwork(models.Model):
+# Машинное обучение
+class DQNAgent:
     def __init__(self, state_size, action_size):
-        super(QNetwork, self).__init__()
-        self.dense1 = layers.Dense(64, activation='relu', input_shape=(state_size,))
-        self.dense2 = layers.Dense(64, activation='relu')
-        self.output_layer = layers.Dense(action_size, activation='linear')
+        self.state_size = state_size
+        self.action_size = action_size
+        self.memory = []  # Опыт агента (состояние, действие, награда, новое состояние, завершено)
+        self.gamma = 0.95  # Фактор дисконтирования
+        self.epsilon = 1.0  # Исследование против эксплуатации
+        self.epsilon_decay = 0.995  # Уменьшение исследования с течением времени
+        self.epsilon_min = 0.01  # Минимальное значение исследования
+        self.learning_rate = 0.001
+        self.discount_factor = 0.99
+        self.exploration_rate = 1.0
+        self.exploration_min = 0.01
+        self.exploration_decay = 0.995
+        self.model = self.build_model()
 
-    def call(self, state):
-        x = self.dense1(state)
-        x = self.dense2(x)
-        q_values = self.output_layer(x)
-        return q_values
+    def build_model(self):
+        model = models.Sequential([
+            layers.Dense(4, input_shape=(self.state_size,), activation='relu'),
+            layers.Dense(3, activation='relu'),
+            layers.Dense(2, activation='linear')
+        ])
 
+        model.compile(optimizer='adam', loss='mse', metrics='mae')
 
-def q_learning_train(model, target_model, gamma, batch_size, optimizer, replay_memory):
-    if len(replay_memory) < batch_size:
-        return
+        print(model.summary())
+        return model
 
-    minibatch = np.array(random.sample(replay_memory, batch_size))
-    states = np.vstack(minibatch[:, 0])
-    actions = minibatch[:, 1].astype(int)
-    rewards = minibatch[:, 2]
-    next_states = np.vstack(minibatch[:, 3])
-    dones = minibatch[:, 4]
+    def remember(self, state, action, reward, next_state, done):
+        self.memory.append([state, action, reward, next_state, done])
 
-    target = rewards + gamma * np.max(target_model.predict(next_states), axis=1) * (1 - dones)
+    def act(self, state):
+        if np.random.rand() <= self.epsilon:
+            return np.random.uniform(-1, 1, self.action_size)
+        q_values = self.model.predict(np.array([state]))
+        return q_values[0]
 
-    with tf.GradientTape() as tape:
-        q_values = model(states)
-        selected_action_values = tf.reduce_sum(tf.one_hot(actions, model.output_shape[1]) * q_values, axis=1)
-        loss = tf.reduce_mean(tf.square(selected_action_values - target))
-
-    gradients = tape.gradient(loss, model.trainable_variables)
-    optimizer.apply_gradients(zip(gradients, model.trainable_variables))
+    def replay(self, batch_size):
+        if len(self.memory) < batch_size:
+            return
+        minibatch = functions.custom_random_choice(self.memory, batch_size, replace=False)
+        for state, action, reward, next_state, done in minibatch:
+            target = reward
+            if not done:
+                target = reward + self.discount_factor * np.amax(self.model.predict(np.array([next_state]))[0])
+            target_f = self.model.predict(np.array([state]))
+            target_f[0] = action * target
+            self.model.fit(np.array([state]), target_f, epochs=1, verbose=0, batch_size=16)
+        if self.exploration_rate > self.exploration_min:
+            self.exploration_rate *= self.exploration_decay
