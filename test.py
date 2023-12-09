@@ -82,6 +82,8 @@ if is_ipython:
 
 plt.ion()
 
+print(torch.cuda.is_available())
+
 # if GPU is to be used
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -278,6 +280,9 @@ def select_action(state):
     eps_threshold = EPS_END + (EPS_START - EPS_END) * \
         math.exp(-1. * steps_done / EPS_DECAY)
     steps_done += 1
+
+    acsample = env.action_space.sample()
+
     if sample > eps_threshold:
         with torch.no_grad():
             # t.max(1) will return the largest column value of each row.
@@ -400,7 +405,7 @@ def optimize_model():
 if torch.cuda.is_available():
     num_episodes = 600
 else:
-    num_episodes = 50
+    num_episodes = 600
 
 for i_episode in range(num_episodes):
     # Initialize the environment and get it's state

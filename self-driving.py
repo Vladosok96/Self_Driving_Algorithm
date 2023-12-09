@@ -4,6 +4,7 @@ import numpy as np
 import PySimpleGUI as sg
 import threading
 from time import time
+import random
 
 import torch
 
@@ -102,15 +103,85 @@ current_wall_point = None       # Wall first point
 
 
 state_size = 4  # координаты целевой точки (x, y), скорость и угол поворота руля
-action_size = 2  # целевой угол поворота руля и целевая скорость
+n_actions = 9  # целевой угол поворота руля и целевая скорость
 batch_size = 32
-agent = qlearning.QLearningAgent(state_size, action_size)  # Создаем экземпляр Q-обучения
 state = [0, 0, 0, 0]
+n_observations = len(state)
+policy_net = qlearning.DQN(n_observations, n_actions).to(qlearning.device)
+target_net = qlearning.DQN(n_observations, n_actions).to(qlearning.device)
+target_net.load_state_dict(policy_net.state_dict())
+optimizer = qlearning.optim.Adam(policy_net.parameters(), lr=qlearning.LR, amsgrad=True)
+memory = qlearning.ReplayMemory(10000)
+steps_done = 0
 total_reward = 0
 done = False
 counter = 0
 begining_position = linalg.POINT(0, 0, 0)
 fit_counter = 0
+episode_durations = []
+
+
+def select_action(state):
+    global steps_done
+    sample = random.random()
+    eps_threshold = qlearning.EPS_END + (qlearning.EPS_START - qlearning.EPS_END) * \
+        math.exp(-1. * steps_done / qlearning.EPS_DECAY)
+    steps_done += 1
+    if sample > eps_threshold:
+        with torch.no_grad():
+            # t.max(1) will return the largest column value of each row.
+            # second column on max result is index of where max element was
+            # found, so we pick action with the larger expected reward.
+            return policy_net(state).max(1).indices.view(1, 1)
+    else:
+        return torch.tensor([[random.randint(0, 8)]], device=qlearning.device, dtype=torch.long)
+
+
+def optimize_model():
+    if len(memory) < qlearning.BATCH_SIZE:
+        return
+    transitions = memory.sample(qlearning.BATCH_SIZE)
+    # Transpose the batch (see https://stackoverflow.com/a/19343/3343043 for
+    # detailed explanation). This converts batch-array of Transitions
+    # to Transition of batch-arrays.
+    batch = qlearning.Transition(*zip(*transitions))
+
+    # Compute a mask of non-final states and concatenate the batch elements
+    # (a final state would've been the one after which simulation ended)
+    non_final_mask = torch.tensor(tuple(map(lambda s: s is not None,
+                                          batch.next_state)), device=qlearning.device, dtype=torch.bool)
+    non_final_next_states = torch.cat([s for s in batch.next_state
+                                                if s is not None])
+    state_batch = torch.cat(batch.state)
+    action_batch = torch.cat(batch.action)
+    reward_batch = torch.cat(batch.reward)
+
+    # Compute Q(s_t, a) - the model computes Q(s_t), then we select the
+    # columns of actions taken. These are the actions which would've been taken
+    # for each batch state according to policy_net
+    state_action_values = policy_net(state_batch).gather(1, action_batch)
+
+    # Compute V(s_{t+1}) for all next states.
+    # Expected values of actions for non_final_next_states are computed based
+    # on the "older" target_net; selecting their best reward with max(1).values
+    # This is merged based on the mask, such that we'll have either the expected
+    # state value or 0 in case the state was final.
+    next_state_values = torch.zeros(qlearning.BATCH_SIZE, device=qlearning.device)
+    with torch.no_grad():
+        next_state_values[non_final_mask] = target_net(non_final_next_states).max(1).values
+    # Compute the expected Q values
+    expected_state_action_values = (next_state_values * qlearning.GAMMA) + reward_batch
+
+    # Compute Huber loss
+    criterion = qlearning.nn.SmoothL1Loss()
+    loss = criterion(state_action_values, expected_state_action_values.unsqueeze(1))
+
+    # Optimize the model
+    optimizer.zero_grad()
+    loss.backward()
+    # In-place gradient clipping
+    torch.nn.utils.clip_grad_value_(policy_net.parameters(), 100)
+    optimizer.step()
 
 
 # пременные
@@ -174,6 +245,28 @@ layout = [[sg.Text('Автомобиль')],
           [sg.Button('Ok'), sg.Button('Cancel')] ]
 
 
+# Конвертация числа в управляющие команды
+def num_control(number):
+    if number == 0:
+        return [-1, -1]
+    if number == 1:
+        return [0, -1]
+    if number == 2:
+        return [1, -1]
+    if number == 3:
+        return [-1, 0]
+    if number == 4:
+        return [0, 0]
+    if number == 5:
+        return [1, 0]
+    if number == 6:
+        return [-1, 1]
+    if number == 7:
+        return [0, 1]
+    if number == 8:
+        return [1, 1]
+
+
 def CAD_window():
     global runGame
     global FIRST_POINT_CF
@@ -214,28 +307,25 @@ def CAD_window():
 CAD_window_task = threading.Thread(target=CAD_window, args=())
 CAD_window_task.start()
 
+state = torch.tensor(state, dtype=torch.float32, device=qlearning.device).unsqueeze(0)
+
 # отрисовка
 while runGame:
 
     # Данные, относящиеся к Q-обучению
     reward = 0
-    next_state = state.copy()
+    next_state = [0, 0, 0, 0]
     out_of_way = False
 
-    with torch.no_grad():
-        state_tensor = torch.tensor(state, dtype=torch.float32)
-        if np.random.rand() <= 0.2:
-            action = np.random.uniform(-1, 1, 2)
-        else:
-            q_values = agent.q_network(state_tensor)
-            action = q_values.numpy()
+    action = select_action(state)
+    control = num_control(action)
 
     if len(high_destinations) > 0 and not is_achieved:
 
         if high_destinations[0].direction == 1:
-            reward += action[1]
+            reward += control[1]
         else:
-            reward -= action[1]
+            reward -= control[1]
 
         # Рассчет вектора до точек
         if len(high_destinations) > NEXT_POINT_OFFSET:
@@ -360,8 +450,8 @@ while runGame:
 
     # Применение событий для машины
     if not is_achieved:
-        destination_angle = action[0]
-        player.velocity = action[1]
+        destination_angle = control[0]
+        player.velocity = control[1]
         if player.velocity >= 0:
             player.steering_angle = max(min(destination_angle * 5, 3.5), -5)
         else:
@@ -420,11 +510,20 @@ while runGame:
         next_state[2] = player.vector.get_length() / 5
         next_state[3] = player.steering_angle / 10
 
-        if reward < -0.5:
-            print("bruh")
+        next_state = torch.tensor(next_state, dtype=torch.float32, device=qlearning.device).unsqueeze(0)
+        reward = torch.tensor([reward], device=qlearning.device)
+
         # Сохраняем опыт и обновляем модель
-        agent.update_q_values(state, action, reward, next_state)
-        state = next_state.copy()
+        memory.push(state, action, next_state, reward)
+        state = next_state
+
+        optimize_model()
+
+        target_net_state_dict = target_net.state_dict()
+        policy_net_state_dict = policy_net.state_dict()
+        for key in policy_net_state_dict:
+            target_net_state_dict[key] = policy_net_state_dict[key] * qlearning.TAU + target_net_state_dict[key] * (1 - qlearning.TAU)
+        target_net.load_state_dict(target_net_state_dict)
 
         # # Обучаем модель на случайном подмножестве опыта:
         # # - При сходе с маршрута
@@ -443,19 +542,20 @@ while runGame:
 
     # Вывод информации в виде текста
     text_revard = sysfont.render(f'reward: {reward}', False, (0, 0, 0))
-    text_states = sysfont.render(f'states:', False, (0, 0, 0))
-    text_states_1 = sysfont.render(f'    x: {next_state[0]}', False, (0, 0, 0))
-    text_states_2 = sysfont.render(f'    y: {next_state[1]}', False, (0, 0, 0))
-    text_states_3 = sysfont.render(f'    vector: {next_state[2]}', False, (0, 0, 0))
-    text_states_4 = sysfont.render(f'    angle: {next_state[3]}', False, (0, 0, 0))
-    text_action = sysfont.render(f'action:{str(action)}', False, (0, 0, 0))
+    text_action = sysfont.render(f'action: {str(control)}', False, (0, 0, 0))
+    text_states = sysfont.render(f'states: {str(state)}', False, (0, 0, 0))
+    # text_states_1 = sysfont.render(f'    x: {next_state[0]}', False, (0, 0, 0))
+    # text_states_2 = sysfont.render(f'    y: {next_state[1]}', False, (0, 0, 0))
+    # text_states_3 = sysfont.render(f'    vector: {next_state[2]}', False, (0, 0, 0))
+    # text_states_4 = sysfont.render(f'    angle: {next_state[3]}', False, (0, 0, 0))
     screen.blit(text_revard, (0, 0))
-    screen.blit(text_states, (0, 20))
-    screen.blit(text_states_1, (0, 40))
-    screen.blit(text_states_2, (0, 60))
-    screen.blit(text_states_3, (0, 80))
-    screen.blit(text_states_4, (0, 100))
-    screen.blit(text_action, (0, 120))
+    screen.blit(text_action, (0, 20))
+    screen.blit(text_states, (0, 40))
+    # screen.blit(text_states, (0, 20))
+    # screen.blit(text_states_1, (0, 40))
+    # screen.blit(text_states_2, (0, 60))
+    # screen.blit(text_states_3, (0, 80))
+    # screen.blit(text_states_4, (0, 100))
 
     blit_rotate(screen, trueno, (player.position.x + camera.position.x, player.position.y + camera.position.y),
                 (29, 76), player.position.angle)

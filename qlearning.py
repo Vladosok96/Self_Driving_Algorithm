@@ -163,25 +163,3 @@ EPS_END = 0.05
 EPS_DECAY = 1000
 TAU = 0.005
 LR = 1e-4
-
-# Get number of actions from gym action space
-n_actions = 2
-# Get the number of state observations
-state, info = np.array
-n_observations = len(state)
-
-
-def select_action(state):
-    global steps_done
-    sample = random.random()
-    eps_threshold = EPS_END + (EPS_START - EPS_END) * \
-        math.exp(-1. * steps_done / EPS_DECAY)
-    steps_done += 1
-    if sample > eps_threshold:
-        with torch.no_grad():
-            # t.max(1) will return the largest column value of each row.
-            # second column on max result is index of where max element was
-            # found, so we pick action with the larger expected reward.
-            return policy_net(state).max(1).indices.view(1, 1)
-    else:
-        return torch.tensor([[env.action_space.sample()]], device=device, dtype=torch.long)
