@@ -4,6 +4,9 @@ import numpy as np
 import PySimpleGUI as sg
 import threading
 from time import time
+
+import torch
+
 import ReedsShepp
 import qlearning
 import linalg
@@ -43,7 +46,7 @@ def to_radians(angle):
     return angle
 
 
-def blit_rotate(surf, image, pos, originPos, angle):
+def blit_rotate(surf, image, pos, origin_pos, angle):
     angle = -angle
     # calculate the axis aligned bounding box of the rotated image
     w, h = image.get_size()
@@ -53,12 +56,12 @@ def blit_rotate(surf, image, pos, originPos, angle):
     max_box = (max(box_rotate, key=lambda p: p[0])[0], max(box_rotate, key=lambda p: p[1])[1])
 
     # calculate the translation of the pivot
-    pivot = pygame.math.Vector2(originPos[0], -originPos[1])
+    pivot = pygame.math.Vector2(origin_pos[0], -origin_pos[1])
     pivot_rotate = pivot.rotate(angle)
     pivot_move = pivot_rotate - pivot
 
     # calculate the upper left origin of the rotated image
-    origin = (pos[0] - originPos[0] + min_box[0] - pivot_move[0], pos[1] - originPos[1] - max_box[1] + pivot_move[1])
+    origin = (pos[0] - origin_pos[0] + min_box[0] - pivot_move[0], pos[1] - origin_pos[1] - max_box[1] + pivot_move[1])
 
     # get a rotated image
     rotated_image = pygame.transform.rotate(image, angle)
@@ -76,6 +79,10 @@ pygame.display.set_caption("Initial N")
 pygame.mixer.init()
 runGame = True
 
+# Шрифты
+pygame.font.init()
+sysfont = pygame.font.SysFont('arial', 20)
+
 # изображения
 trueno = pygame.image.load("trueno.png")
 
@@ -90,8 +97,6 @@ is_reverse = False
 destination = linalg.POINT(0, 0, 0)
 departure = linalg.POINT(0, 0, 0)
 destination_angle = 0
-pygame.font.init()
-heading_font = pygame.font.SysFont("Arial", 20)
 current_vector_point = None     # Start direction vector
 current_wall_point = None       # Wall first point
 
@@ -99,7 +104,7 @@ current_wall_point = None       # Wall first point
 state_size = 4  # координаты целевой точки (x, y), скорость и угол поворота руля
 action_size = 2  # целевой угол поворота руля и целевая скорость
 batch_size = 32
-agent = qlearning.DQNAgent(state_size, action_size) # Создаем экземпляр Q-обучения
+agent = qlearning.QLearningAgent(state_size, action_size)  # Создаем экземпляр Q-обучения
 state = [0, 0, 0, 0]
 total_reward = 0
 done = False
@@ -130,9 +135,9 @@ def research_destinations():
     tmp_low_destintaions = destinations.copy()
 
     tmp_low_destintaions.insert(0, linalg.POINT(player.position.x,
-                                         player.position.y,
-                                         angle=np.deg2rad(player.position.angle + 90),
-                                         direction=-1))
+                                                player.position.y,
+                                                angle=np.deg2rad(player.position.angle + 90),
+                                                direction=-1))
 
     for i in range(len(tmp_low_destintaions) - 1):
         s_x = tmp_low_destintaions[i].x
@@ -147,9 +152,9 @@ def research_destinations():
 
         for j in range(len(path_i.x)):
             high_destinations.append(linalg.POINT(path_i.x[j],
-                                           path_i.y[j],
-                                           angle=path_i.yaw[j] + 90,
-                                           direction=-path_i.directions[j]))
+                                                  path_i.y[j],
+                                                  angle=path_i.yaw[j] + 90,
+                                                  direction=-path_i.directions[j]))
     high_destinations = high_destinations[15:]
 
 
@@ -215,10 +220,17 @@ while runGame:
     # Данные, относящиеся к Q-обучению
     reward = 0
     next_state = state.copy()
-    action = agent.act(state)
     out_of_way = False
 
-    if len(high_destinations) > 0:
+    with torch.no_grad():
+        state_tensor = torch.tensor(state, dtype=torch.float32)
+        if np.random.rand() <= 0.2:
+            action = np.random.uniform(-1, 1, 2)
+        else:
+            q_values = agent.q_network(state_tensor)
+            action = q_values.numpy()
+
+    if len(high_destinations) > 0 and not is_achieved:
 
         if high_destinations[0].direction == 1:
             reward += action[1]
@@ -229,17 +241,17 @@ while runGame:
         if len(high_destinations) > NEXT_POINT_OFFSET:
             point_vector = linalg.VECTOR2(high_destinations[NEXT_POINT_OFFSET].x - player.position.x,
                                           high_destinations[NEXT_POINT_OFFSET].y - player.position.y) \
-                .rotate(math.radians(player.position.angle))
+                .rotate(math.radians(-player.position.angle + 90))
 
-            next_state[0] = point_vector.x
-            next_state[1] = -point_vector.y
+            next_state[0] = point_vector.x / 50
+            next_state[1] = - point_vector.y / 50
 
         done = False
 
         # Проверка на сход с маршрута
         if linalg.VECTOR2(player.position.x - high_destinations[0].x,
-                   player.position.y - high_destinations[0].y).get_length() > 50:
-            reward -= 5
+                          player.position.y - high_destinations[0].y).get_length() > 20:
+            reward -= 1
             out_of_way = True
 
         # Удаление достигнутых точек
@@ -248,7 +260,7 @@ while runGame:
                 destinations.pop(0)
                 begining_position = linalg.POINT(player.position.x, player.position.y, player.position.angle)
         while not is_achieved and linalg.VECTOR2(player.position.x - high_destinations[0].x,
-                                          player.position.y - high_destinations[0].y).get_length() < 10:
+                                                 player.position.y - high_destinations[0].y).get_length() < 10:
             high_destinations.pop(0)
             departure = linalg.POINT(player.position.x, player.position.y, 0)
             reward += 0.5
@@ -261,7 +273,7 @@ while runGame:
             if event.button == 1:
                 is_reverse = False
                 current_vector_point = linalg.POINT(pygame.mouse.get_pos()[0] - camera.position.x,
-                                             pygame.mouse.get_pos()[1] - camera.position.y, direction = 1)
+                                                    pygame.mouse.get_pos()[1] - camera.position.y, direction = 1)
 
                 departure = linalg.POINT(player.position.x, player.position.y, 0)
             if event.button == 2:
@@ -270,21 +282,21 @@ while runGame:
                 is_achieved = True
             if event.button == 3:
                 current_wall_point = linalg.POINT(pygame.mouse.get_pos()[0] - camera.position.x,
-                                           pygame.mouse.get_pos()[1] - camera.position.y, direction=1)
+                                                  pygame.mouse.get_pos()[1] - camera.position.y, direction=1)
 
         if event.type == pygame.MOUSEBUTTONUP:
             if event.button == 1:
                 if current_vector_point != None:
                     current_vector_point.angle = linalg.vector_angle(linalg.VECTOR2(current_vector_point.x - (pygame.mouse.get_pos()[0] - camera.position.x),
-                                                                      current_vector_point.y - (pygame.mouse.get_pos()[1] - camera.position.y)))
+                                                                                    current_vector_point.y - (pygame.mouse.get_pos()[1] - camera.position.y)))
                     destinations.append(current_vector_point)
                     current_vector_point = None
             if event.button == 3:
                 if current_wall_point != None:
                     walls.append(linalg.STRAIGHT(current_wall_point.x,
-                                          current_wall_point.y,
-                                          pygame.mouse.get_pos()[0] - camera.position.x,
-                                          pygame.mouse.get_pos()[1] - camera.position.y))
+                                                 current_wall_point.y,
+                                                 pygame.mouse.get_pos()[0] - camera.position.x,
+                                                 pygame.mouse.get_pos()[1] - camera.position.y))
                     current_wall_point = None
 
         if event.type == pygame.KEYDOWN:
@@ -346,26 +358,30 @@ while runGame:
             elif event.key == 1073741905:
                 camera.is_down = False
 
-    # Рассчет действий для автомобиля
-
-    destination_angle = action[0]
-    velocity = action[1] / 4
-
     # Применение событий для машины
     if not is_achieved:
-        player.velocity = velocity
-        if velocity >= 0:
+        destination_angle = action[0]
+        player.velocity = action[1]
+        if player.velocity >= 0:
             player.steering_angle = max(min(destination_angle * 5, 3.5), -5)
         else:
             player.steering_angle = -max(min(destination_angle * 5, 3.5), -5)
     else:
+        if player.is_w:
+            player.velocity += 0.5
+        if player.is_s:
+            player.velocity -= 0.5
+        if player.is_a:
+            player.steering_angle = -7
+        if player.is_d:
+            player.steering_angle = 7
         if not is_reverse:
             if player.velocity > 1:
                 player.velocity -= 0.5
         else:
             if player.velocity < 0:
                 player.velocity += 0.5
-        player.steering_angle = 0
+        # player.steering_angle = 0
 
     # Применение событий для камеры
     if camera.is_left:
@@ -377,17 +393,13 @@ while runGame:
     if camera.is_down:
         camera.position.y -= 20
 
-    ## перемещение
-
-    # Слежение камеры за машиной
-    # camera.position.x -= (camera.position.x + player.position.x - 600) * 0.15 * (1 / 2)
-    # camera.position.y -= (camera.position.y + player.position.y - 400) * 0.15 * (1 / 2)
+    # перемещение
 
     player.position.angle = solve_angle(player.position.angle,
                                         player.steering_angle * (player.vector.get_length() / 10))
 
     direction_vector = linalg.VECTOR2(math.cos(to_radians(player.position.angle)) * player.velocity * (1 / 2),
-                               math.sin(to_radians(player.position.angle)) * player.velocity * (1 / 2))
+                                      math.sin(to_radians(player.position.angle)) * player.velocity * (1 / 2))
     player.vector.median(direction_vector.x, direction_vector.y, 0.7)
 
     player.position.x += player.vector.x
@@ -402,44 +414,64 @@ while runGame:
     if (not player.is_a) and (not player.is_d) and player.steering_angle < 0:
         player.steering_angle += 0.1
 
-    # Рассчет следующего состояния
+    # Вторая половина части с машинным обучением:
+    if not is_achieved:
+        # Рассчет следующего состояния
+        next_state[2] = player.vector.get_length() / 5
+        next_state[3] = player.steering_angle / 10
 
-    # Сохраняем опыт и обновляем модель
-    agent.remember(state, action, reward, next_state, done)
-    state = next_state.copy()
+        if reward < -0.5:
+            print("bruh")
+        # Сохраняем опыт и обновляем модель
+        agent.update_q_values(state, action, reward, next_state)
+        state = next_state.copy()
 
-    # Обучаем модель на случайном подмножестве опыта
-    if out_of_way:
-        player.position = linalg.POINT(begining_position.x, begining_position.y, begining_position.angle)
-        player.vector = linalg.VECTOR2(0, 0)
-        player.velocity = 0
-        research_destinations()
-        counter += 1
-        if counter > 5:
-            agent.replay(batch_size)
-            counter = 0
-
-    fit_counter += 1
-    if fit_counter > 1000:
-        agent.replay(batch_size)
-        fit_counter = 0
+        # # Обучаем модель на случайном подмножестве опыта:
+        # # - При сходе с маршрута
+        if out_of_way:
+            player.position = linalg.POINT(begining_position.x, begining_position.y, begining_position.angle)
+            player.vector = linalg.VECTOR2(0, 0)
+            player.velocity = 0
+            research_destinations()
+        # # - При прохождении тысячи повторений
+        # fit_counter += 1
+        # if fit_counter > 1000:
+        #     agent.replay(batch_size)
+        #     fit_counter = 0
 
     screen.fill((200, 200, 200))
+
+    # Вывод информации в виде текста
+    text_revard = sysfont.render(f'reward: {reward}', False, (0, 0, 0))
+    text_states = sysfont.render(f'states:', False, (0, 0, 0))
+    text_states_1 = sysfont.render(f'    x: {next_state[0]}', False, (0, 0, 0))
+    text_states_2 = sysfont.render(f'    y: {next_state[1]}', False, (0, 0, 0))
+    text_states_3 = sysfont.render(f'    vector: {next_state[2]}', False, (0, 0, 0))
+    text_states_4 = sysfont.render(f'    angle: {next_state[3]}', False, (0, 0, 0))
+    text_action = sysfont.render(f'action:{str(action)}', False, (0, 0, 0))
+    screen.blit(text_revard, (0, 0))
+    screen.blit(text_states, (0, 20))
+    screen.blit(text_states_1, (0, 40))
+    screen.blit(text_states_2, (0, 60))
+    screen.blit(text_states_3, (0, 80))
+    screen.blit(text_states_4, (0, 100))
+    screen.blit(text_action, (0, 120))
+
     blit_rotate(screen, trueno, (player.position.x + camera.position.x, player.position.y + camera.position.y),
                 (29, 76), player.position.angle)
 
     point_front = linalg.POINT(player.position.x + math.cos(to_radians(player.position.angle)) * 1000,
-                        player.position.y + math.sin(to_radians(player.position.angle)) * 1000)
+                               player.position.y + math.sin(to_radians(player.position.angle)) * 1000)
     point_half_left = linalg.POINT(player.position.x + math.cos(to_radians(player.position.angle + 35)) * 1000,
-                            player.position.y + math.sin(to_radians(player.position.angle + 35)) * 1000)
+                                   player.position.y + math.sin(to_radians(player.position.angle + 35)) * 1000)
 
     point_half_right = linalg.POINT(player.position.x + math.cos(to_radians(player.position.angle - 35)) * 1000,
-                             player.position.y + math.sin(to_radians(player.position.angle - 35)) * 1000)
+                                    player.position.y + math.sin(to_radians(player.position.angle - 35)) * 1000)
     point_left = linalg.POINT(player.position.x + math.cos(to_radians(player.position.angle + 90)) * 1000,
-                       player.position.y + math.sin(to_radians(player.position.angle + 90)) * 1000)
+                              player.position.y + math.sin(to_radians(player.position.angle + 90)) * 1000)
 
     point_right = linalg.POINT(player.position.x + math.cos(to_radians(player.position.angle - 90)) * 1000,
-                        player.position.y + math.sin(to_radians(player.position.angle - 90)) * 1000)
+                               player.position.y + math.sin(to_radians(player.position.angle - 90)) * 1000)
 
     if (time() - last_add_way > 0.1):
         way.append(linalg.POINT(player.position.x, player.position.y))
@@ -507,22 +539,22 @@ while runGame:
     # отрисовка "векторов" направлений
 
     if current_vector_point != None:
-            pygame.draw.line(screen, pygame.Color(255, 255, 0),
-                             [current_vector_point.x + camera.position.x, current_vector_point.y + camera.position.y],
-                             [pygame.mouse.get_pos()[0],
-                              pygame.mouse.get_pos()[1]], 3)
+        pygame.draw.line(screen, pygame.Color(255, 255, 0),
+                         [current_vector_point.x + camera.position.x, current_vector_point.y + camera.position.y],
+                         [pygame.mouse.get_pos()[0],
+                          pygame.mouse.get_pos()[1]], 3)
 
     if current_wall_point != None:
-            pygame.draw.line(screen, pygame.Color(0, 255, 100),
-                             [current_wall_point.x + camera.position.x, current_wall_point.y + camera.position.y],
-                             [pygame.mouse.get_pos()[0],
-                              pygame.mouse.get_pos()[1]], 3)
+        pygame.draw.line(screen, pygame.Color(0, 255, 100),
+                         [current_wall_point.x + camera.position.x, current_wall_point.y + camera.position.y],
+                         [pygame.mouse.get_pos()[0],
+                          pygame.mouse.get_pos()[1]], 3)
 
     # Отрисовка линий путей
     if show_lines == 1 or show_lines == 2:
 
         angle_vector = linalg.VECTOR2(math.cos(to_radians(player.position.angle)) * 10 * (1 / 2),
-                               math.sin(to_radians(player.position.angle)) * 10 * (1 / 2))
+                                      math.sin(to_radians(player.position.angle)) * 10 * (1 / 2))
 
         # отрисовка низкодискретизированного пути
         if len(destinations) > 0:
