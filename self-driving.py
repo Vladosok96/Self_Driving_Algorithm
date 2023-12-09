@@ -322,11 +322,6 @@ while runGame:
 
     if len(high_destinations) > 0 and not is_achieved:
 
-        if high_destinations[0].direction == 1:
-            reward += control[1]
-        else:
-            reward -= control[1]
-
         # Рассчет вектора до точек
         if len(high_destinations) > NEXT_POINT_OFFSET:
             point_vector = linalg.VECTOR2(high_destinations[NEXT_POINT_OFFSET].x - player.position.x,
@@ -451,26 +446,32 @@ while runGame:
     # Применение событий для машины
     if not is_achieved:
         destination_angle = control[0]
-        player.velocity = control[1]
+        player.velocity += control[1]
+        player.velocity = min(5, max(-2, player.velocity))
         if player.velocity >= 0:
-            player.steering_angle = max(min(destination_angle * 5, 3.5), -5)
+            player.steering_angle = max(min(destination_angle * 7, 7), -7)
         else:
-            player.steering_angle = -max(min(destination_angle * 5, 3.5), -5)
+            player.steering_angle = -max(min(destination_angle * 7, 7), -7)
     else:
         if player.is_w:
             player.velocity += 0.5
-        if player.is_s:
+        elif player.is_s:
             player.velocity -= 0.5
-        if player.is_a:
-            player.steering_angle = -7
-        if player.is_d:
-            player.steering_angle = 7
-        if not is_reverse:
-            if player.velocity > 1:
-                player.velocity -= 0.5
+        elif player.velocity > 0.5:
+            player.velocity -= 0.5
+        elif player.velocity < 0:
+            player.velocity += 0.5
+        player.velocity = min(5, max(-2, player.velocity))
+        if player.velocity >= 0:
+            if player.is_a:
+                player.steering_angle = -7
+            if player.is_d:
+                player.steering_angle = 7
         else:
-            if player.velocity < 0:
-                player.velocity += 0.5
+            if player.is_a:
+                player.steering_angle = 7
+            if player.is_d:
+                player.steering_angle = -7
         # player.steering_angle = 0
 
     # Применение событий для камеры
@@ -525,18 +526,12 @@ while runGame:
             target_net_state_dict[key] = policy_net_state_dict[key] * qlearning.TAU + target_net_state_dict[key] * (1 - qlearning.TAU)
         target_net.load_state_dict(target_net_state_dict)
 
-        # # Обучаем модель на случайном подмножестве опыта:
-        # # - При сходе с маршрута
         if out_of_way:
             player.position = linalg.POINT(begining_position.x, begining_position.y, begining_position.angle)
             player.vector = linalg.VECTOR2(0, 0)
             player.velocity = 0
             research_destinations()
-        # # - При прохождении тысячи повторений
-        # fit_counter += 1
-        # if fit_counter > 1000:
-        #     agent.replay(batch_size)
-        #     fit_counter = 0
+
 
     screen.fill((200, 200, 200))
 
@@ -544,18 +539,9 @@ while runGame:
     text_revard = sysfont.render(f'reward: {reward}', False, (0, 0, 0))
     text_action = sysfont.render(f'action: {str(control)}', False, (0, 0, 0))
     text_states = sysfont.render(f'states: {str(state)}', False, (0, 0, 0))
-    # text_states_1 = sysfont.render(f'    x: {next_state[0]}', False, (0, 0, 0))
-    # text_states_2 = sysfont.render(f'    y: {next_state[1]}', False, (0, 0, 0))
-    # text_states_3 = sysfont.render(f'    vector: {next_state[2]}', False, (0, 0, 0))
-    # text_states_4 = sysfont.render(f'    angle: {next_state[3]}', False, (0, 0, 0))
     screen.blit(text_revard, (0, 0))
     screen.blit(text_action, (0, 20))
     screen.blit(text_states, (0, 40))
-    # screen.blit(text_states, (0, 20))
-    # screen.blit(text_states_1, (0, 40))
-    # screen.blit(text_states_2, (0, 60))
-    # screen.blit(text_states_3, (0, 80))
-    # screen.blit(text_states_4, (0, 100))
 
     blit_rotate(screen, trueno, (player.position.x + camera.position.x, player.position.y + camera.position.y),
                 (29, 76), player.position.angle)
@@ -576,6 +562,8 @@ while runGame:
     if (time() - last_add_way > 0.1):
         way.append(linalg.POINT(player.position.x, player.position.y))
         last_add_way = time()
+        if len(way) > 2000:
+            way = way[-1000:]
     for i in range(1, len(way)):
         pygame.draw.line(screen, pygame.Color(255, 0, 255), [way[i - 1].x + camera.position.x, way[i - 1].y + camera.position.y],
                          [way[i].x + camera.position.x, way[i].y + camera.position.y], 2)
