@@ -90,7 +90,7 @@ trueno = pygame.image.load("trueno.png")
 # Следование до точки
 FIRST_POINT_CF = 0.75
 STEERING_CF = 3.5
-NEXT_POINT_OFFSET = 20
+NEXT_POINT_INTERVAL = 50
 destinations = []
 high_destinations = []
 is_achieved = True
@@ -100,12 +100,13 @@ departure = linalg.POINT(0, 0, 0)
 destination_angle = 0
 current_vector_point = None     # Start direction vector
 current_wall_point = None       # Wall first point
+points_buffer = []
 
 
-state_size = 4  # координаты целевой точки (x, y), скорость и угол поворота руля
-n_actions = 9  # целевой угол поворота руля и целевая скорость
+state_size = 8
+n_actions = 9
 batch_size = 32
-state = [0, 0, 0, 0]
+state = [0, 0, 0, 0, 0, 0, 0, 0]
 n_observations = len(state)
 policy_net = qlearning.DQN(n_observations, n_actions).to(qlearning.device)
 target_net = qlearning.DQN(n_observations, n_actions).to(qlearning.device)
@@ -218,8 +219,11 @@ def research_destinations():
         g_y = tmp_low_destintaions[i + 1].y
         g_yaw = tmp_low_destintaions[i + 1].angle
 
-        path_i = ReedsShepp.calc_optimal_path(s_x, s_y, s_yaw,
+        try:
+            path_i = ReedsShepp.calc_optimal_path(s_x, s_y, s_yaw,
                                    g_x, g_y, g_yaw, ReedsShepp.max_c, ReedsShepp.STEP_SIZE)
+        except:
+            return False
 
         for j in range(len(path_i.x)):
             high_destinations.append(linalg.POINT(path_i.x[j],
@@ -237,7 +241,7 @@ layout = [[sg.Text('Автомобиль')],
           [sg.Text('Алгоритм следования')],
           [sg.Text('Соотношение значимости'), sg.Slider(orientation='h', range=(0, 1), resolution=0.05, default_value=0.5)],
           [sg.Text('Коэффициент руления'), sg.InputText(default_text=STEERING_CF)],
-          [sg.Text('Дальность второй точки'), sg.Slider(orientation='h', range=(2, 50), resolution=1, default_value=NEXT_POINT_OFFSET)],
+          [sg.Text('Дальность второй точки'), sg.Slider(orientation='h', range=(2, 50), resolution=1, default_value=NEXT_POINT_INTERVAL)],
           [sg.HorizontalSeparator()],
           [sg.Text('Алгоритм построения пути')],
           [sg.Text('Минимальный радиус'), sg.InputText(default_text=ReedsShepp.max_c)],
@@ -271,7 +275,7 @@ def CAD_window():
     global runGame
     global FIRST_POINT_CF
     global STEERING_CF
-    global NEXT_POINT_OFFSET
+    global NEXT_POINT_INTERVAL
     window = sg.Window('Система проектирования БПТС', layout)
     last_update = {0: '0', 1: '0', 3: '0', 4: '0', 5: '0', 7: '0', 8: '0'}
 
@@ -287,7 +291,7 @@ def CAD_window():
                 STEERING_CF = float(values[4])
         except:
             pass
-        NEXT_POINT_OFFSET = int(values[5])
+        NEXT_POINT_INTERVAL = int(values[5])
         try:
             if float(values[7]) > 0:
                 ReedsShepp.max_c = float(values[7])
@@ -312,9 +316,11 @@ state = torch.tensor(state, dtype=torch.float32, device=qlearning.device).unsque
 # отрисовка
 while runGame:
 
+    points_buffer.clear()
+
     # Данные, относящиеся к Q-обучению
     reward = 0
-    next_state = [0, 0, 0, 0]
+    next_state = [0, 0, 0, 0, 0, 0, 0, 0]
     out_of_way = False
 
     action = select_action(state)
@@ -322,14 +328,16 @@ while runGame:
 
     if len(high_destinations) > 0 and not is_achieved:
 
-        # Рассчет вектора до точек
-        if len(high_destinations) > NEXT_POINT_OFFSET:
-            point_vector = linalg.VECTOR2(high_destinations[NEXT_POINT_OFFSET].x - player.position.x,
-                                          high_destinations[NEXT_POINT_OFFSET].y - player.position.y) \
-                .rotate(math.radians(-player.position.angle + 90))
-
-            next_state[0] = point_vector.x / 50
-            next_state[1] = - point_vector.y / 50
+        # Рассчет векторов до точек
+        if len(high_destinations) > 0:
+            for i in range(3):
+                calulate_offset = min(len(high_destinations) - 1, NEXT_POINT_INTERVAL * (i + 1))
+                point_vector = linalg.VECTOR2(high_destinations[calulate_offset].x - player.position.x,
+                                              high_destinations[calulate_offset].y - player.position.y) \
+                    .rotate(math.radians(-player.position.angle + 90))
+                points_buffer.append(linalg.POINT(high_destinations[calulate_offset].x, high_destinations[calulate_offset].y))
+                next_state[2 * i] = point_vector.x / (100 * (i + 1))
+                next_state[2 * i + 1] = - point_vector.y / (100 * (i + 1))
 
         done = False
 
@@ -508,8 +516,8 @@ while runGame:
     # Вторая половина части с машинным обучением:
     if not is_achieved:
         # Рассчет следующего состояния
-        next_state[2] = player.vector.get_length() / 5
-        next_state[3] = player.steering_angle / 10
+        next_state[6] = player.vector.get_length() / 5
+        next_state[7] = player.steering_angle / 10
 
         next_state = torch.tensor(next_state, dtype=torch.float32, device=qlearning.device).unsqueeze(0)
         reward = torch.tensor([reward], device=qlearning.device)
@@ -675,8 +683,10 @@ while runGame:
                                      [high_destinations[destination_iterator - 1].x + camera.position.x,
                                       high_destinations[destination_iterator - 1].y + camera.position.y], 3)
 
-    pygame.draw.circle(screen, pygame.Color(255, 0, 0),
-                       [destination.x + camera.position.x, destination.y + camera.position.y], 5)
+    # Отрисовка направляющих точек
+    for i in range(len(points_buffer)):
+        pygame.draw.circle(screen, pygame.Color(0, 0, 0),
+                           [points_buffer[i].x + camera.position.x, points_buffer[i].y + camera.position.y], 5)
 
     for wall in walls:
         if wall.intersection_bool(front_corner_l.x, front_corner_l.y,
