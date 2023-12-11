@@ -11,6 +11,7 @@ import torch
 import ReedsShepp
 import qlearning
 import linalg
+import bumpmap
 
 
 class CAMERA:
@@ -120,6 +121,9 @@ counter = 0
 begining_position = linalg.POINT(0, 0, 0)
 fit_counter = 0
 episode_durations = []
+
+
+bump_map = bumpmap.BumpMap(width=2048, height=2048)
 
 
 def select_action(state):
@@ -331,7 +335,7 @@ while runGame:
         # Рассчет векторов до точек
         if len(high_destinations) > 0:
             for i in range(3):
-                calulate_offset = min(len(high_destinations) - 1, NEXT_POINT_INTERVAL * (i + 1))
+                calulate_offset = min(len(high_destinations) - 1, NEXT_POINT_INTERVAL * (i))
                 point_vector = linalg.VECTOR2(high_destinations[calulate_offset].x - player.position.x,
                                               high_destinations[calulate_offset].y - player.position.y) \
                     .rotate(math.radians(-player.position.angle + 90))
@@ -457,9 +461,9 @@ while runGame:
         player.velocity += control[1]
         player.velocity = min(5, max(-2, player.velocity))
         if player.velocity >= 0:
-            player.steering_angle = max(min(destination_angle * 7, 7), -7)
+            player.steering_angle = destination_angle * 7
         else:
-            player.steering_angle = -max(min(destination_angle * 7, 7), -7)
+            player.steering_angle = -destination_angle * 7
     else:
         if player.is_w:
             player.velocity += 0.5
@@ -469,18 +473,19 @@ while runGame:
             player.velocity -= 0.5
         elif player.velocity < 0:
             player.velocity += 0.5
-        player.velocity = min(5, max(-2, player.velocity))
         if player.velocity >= 0:
             if player.is_a:
-                player.steering_angle = -7
+                player.steering_angle += -0.5
             if player.is_d:
-                player.steering_angle = 7
+                player.steering_angle += 0.5
         else:
             if player.is_a:
-                player.steering_angle = 7
+                player.steering_angle += 0.5
             if player.is_d:
-                player.steering_angle = -7
+                player.steering_angle += -0.5
         # player.steering_angle = 0
+    player.steering_angle = max(min(player.steering_angle, 7), -7)
+    player.velocity = min(5, max(-2, player.velocity))
 
     # Применение событий для камеры
     if camera.is_left:
@@ -540,8 +545,8 @@ while runGame:
             player.velocity = 0
             research_destinations()
 
-
     screen.fill((200, 200, 200))
+    bump_map.draw_normals_map(screen, camera.position.x, camera.position.y)
 
     # Вывод информации в виде текста
     text_revard = sysfont.render(f'reward: {reward}', False, (0, 0, 0))
