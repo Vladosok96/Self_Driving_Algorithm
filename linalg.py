@@ -133,3 +133,9 @@ class VECTOR2:
 
     def __repr__(self):
         return f"x: {self.x}, y: {self.y}"
+
+
+def solve_angle(angle, add):
+    angle += add
+    angle %= 360
+    return angle

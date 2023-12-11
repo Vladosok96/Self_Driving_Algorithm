@@ -13,64 +13,9 @@ import qlearning
 import linalg
 import bumpmap
 import functions
+import structures
 
-
-class CAMERA:
-    def __init__(self, position=linalg.POINT(0, 0, 0)):
-        self.position = position
-        self.is_up = False
-        self.is_left = False
-        self.is_right = False
-        self.is_down = False
-
-
-class PLAYER:
-
-    def __init__(self, position=linalg.POINT(0, 0, 0), velocity=0):
-        self.position = position
-        self.velocity = velocity
-        self.vector = linalg.VECTOR2(0, 0)
-        self.steering_angle = 0.0
-        self.is_w = False
-        self.is_a = False
-        self.is_s = False
-        self.is_d = False
-
-
-def solve_angle(angle, add):
-    angle += add
-    angle %= 360
-    return angle
-
-
-def to_radians(angle):
-    angle = float(angle - 90)
-    angle = (angle / 180) * 3.14159
-    return angle
-
-
-def blit_rotate(surf, image, pos, origin_pos, angle):
-    angle = -angle
-    # calculate the axis aligned bounding box of the rotated image
-    w, h = image.get_size()
-    box = [pygame.math.Vector2(p) for p in [(0, 0), (w, 0), (w, -h), (0, -h)]]
-    box_rotate = [p.rotate(angle) for p in box]
-    min_box = (min(box_rotate, key=lambda p: p[0])[0], min(box_rotate, key=lambda p: p[1])[1])
-    max_box = (max(box_rotate, key=lambda p: p[0])[0], max(box_rotate, key=lambda p: p[1])[1])
-
-    # calculate the translation of the pivot
-    pivot = pygame.math.Vector2(origin_pos[0], -origin_pos[1])
-    pivot_rotate = pivot.rotate(angle)
-    pivot_move = pivot_rotate - pivot
-
-    # calculate the upper left origin of the rotated image
-    origin = (pos[0] - origin_pos[0] + min_box[0] - pivot_move[0], pos[1] - origin_pos[1] - max_box[1] + pivot_move[1])
-
-    # get a rotated image
-    rotated_image = pygame.transform.rotate(image, angle)
-
-    # rotate and blit the image
-    surf.blit(rotated_image, origin)
+import matplotlib.pyplot as plt
 
 
 # параметры окна
@@ -84,7 +29,7 @@ runGame = True
 
 # Шрифты
 pygame.font.init()
-sysfont = pygame.font.SysFont('arial', 20)
+sysfont = pygame.font.SysFont('Arial', 20)
 
 # изображения
 trueno = pygame.image.load("trueno.png")
@@ -104,6 +49,7 @@ current_wall_point = None       # Wall first point
 points_buffer = []
 pixel_by_meter = 36.3
 
+# Параметры q-обучения
 state_size = 9
 n_actions = 9
 batch_size = 32
@@ -121,8 +67,16 @@ beginning_position = linalg.POINT(0, 0, 0)
 fit_counter = 0
 episode_durations = []
 
-
+# Карта высот
 bump_map = bumpmap.BumpMap(width=2048, height=2048)
+
+# Графики
+plot_speeds = []
+plot_differences = []
+plot_times = []
+plot_state = 0
+plot_update_time = 0
+plot_begin_time = 0
 
 
 def select_action(state):
@@ -167,10 +121,32 @@ def optimize_model():
     optimizer.step()
 
 
+# Конвертация числа в управляющие команды
+def num_control(number):
+    if number == 0:
+        return [-1, -1]
+    if number == 1:
+        return [0, -1]
+    if number == 2:
+        return [1, -1]
+    if number == 3:
+        return [-1, 0]
+    if number == 4:
+        return [0, 0]
+    if number == 5:
+        return [1, 0]
+    if number == 6:
+        return [-1, 1]
+    if number == 7:
+        return [0, 1]
+    if number == 8:
+        return [1, 1]
+
+
 # пременные
 fps = 60
-player = PLAYER(linalg.POINT(300, 300, 0), 0)
-camera = CAMERA(linalg.POINT(0, 0, 0))
+player = structures.PLAYER(linalg.POINT(300, 300, 0), 0)
+camera = structures.CAMERA(linalg.POINT(0, 0, 0))
 show_lines = 1
 
 # карта стен
@@ -228,29 +204,9 @@ layout = [[sg.Text('Автомобиль')],
           [sg.Text('Алгоритм построения пути')],
           [sg.Text('Минимальный радиус'), sg.InputText(default_text=ReedsShepp.max_c)],
           [sg.Text('Шаг дискретизации'), sg.InputText(default_text=ReedsShepp.STEP_SIZE)],
-          [sg.Button('Ok'), sg.Button('Cancel')] ]
-
-
-# Конвертация числа в управляющие команды
-def num_control(number):
-    if number == 0:
-        return [-1, -1]
-    if number == 1:
-        return [0, -1]
-    if number == 2:
-        return [1, -1]
-    if number == 3:
-        return [-1, 0]
-    if number == 4:
-        return [0, 0]
-    if number == 5:
-        return [1, 0]
-    if number == 6:
-        return [-1, 1]
-    if number == 7:
-        return [0, 1]
-    if number == 8:
-        return [1, 1]
+          [sg.Button('Ok'), sg.Button('Cancel')],
+          [sg.HorizontalSeparator()],
+          [sg.Button('Начало графика', key='-begin_plot-'), sg.Button('Конец графика', key='-end_plot-')]]
 
 
 def CAD_window():
@@ -258,6 +214,8 @@ def CAD_window():
     global FIRST_POINT_CF
     global STEERING_CF
     global NEXT_POINT_INTERVAL
+    global plot_state
+    global plot_begin_time
     window = sg.Window('Система проектирования БПТС', layout)
     last_update = {0: '0', 1: '0', 3: '0', 4: '0', 5: '0', 7: '0', 8: '0'}
 
@@ -266,6 +224,16 @@ def CAD_window():
         if event == sg.WIN_CLOSED or event == 'Cancel':  # if user closes window or clicks cancel
             runGame = False
             break
+
+        if event == '-begin_plot-':
+            plot_begin_time = time()
+            plot_state = 1
+        if event == '-end_plot-':
+            plot_state = 0
+            fig, axs = plt.subplots(2)
+            axs[0].plot(plot_times, plot_speeds)
+            axs[1].plot(plot_times, plot_differences)
+            plt.show()
 
         FIRST_POINT_CF = float(values[3])
         try:
@@ -469,7 +437,7 @@ while runGame:
         player_altitude = bump_map.get_color(player.position.x, player.position.y)
     if 0 < next_position.x < bump_map.width and 0 < next_position.y < bump_map.height:
         next_altitude = bump_map.get_color(next_position.x, next_position.y)
-    altitude_difference = (next_altitude - player_altitude) / 10
+    altitude_difference = (next_altitude - player_altitude) / 20
 
     # Применение событий для камеры
     if camera.is_left:
@@ -483,14 +451,14 @@ while runGame:
 
     # перемещение
     if player.velocity >= 0:
-        player.position.angle = solve_angle(player.position.angle,
+        player.position.angle = linalg.solve_angle(player.position.angle,
                                             player.steering_angle * (player.vector.get_length() / 10))
     else:
-        player.position.angle = solve_angle(player.position.angle,
+        player.position.angle = linalg.solve_angle(player.position.angle,
                                             -player.steering_angle * (player.vector.get_length() / 10))
 
-    direction_vector = linalg.VECTOR2(math.cos(to_radians(player.position.angle)) * player.velocity * (1 / 2),
-                                      math.sin(to_radians(player.position.angle)) * player.velocity * (1 / 2))
+    direction_vector = linalg.VECTOR2(math.cos(math.radians(player.position.angle - 90)) * player.velocity * (1 / 2),
+                                      math.sin(math.radians(player.position.angle - 90)) * player.velocity * (1 / 2))
     direction_vector = direction_vector.mult(1 - altitude_difference)
     player.vector.median(direction_vector.x, direction_vector.y, 0.7)
 
@@ -507,7 +475,7 @@ while runGame:
         player.steering_angle += 0.1
 
     # Вторая половина части с машинным обучением:
-    next_state[6] = player.vector.get_length() / 5
+    next_state[6] = player.vector.get_length() / 6
     next_state[7] = player.steering_angle / 10
     next_state[8] = altitude_difference
     next_state_str = functions.float_array_to_str(next_state)
@@ -557,8 +525,16 @@ while runGame:
     text_speed = sysfont.render(f'speed: {speed_km_h:.2f} km/h [{player.vector.get_length():.2f}]', False, (0, 0, 0))
     screen.blit(text_speed, (10, size[1] - 30))
 
+    # Запись данных в графике
+    if plot_state == 1:
+        if time() - plot_update_time > 0.2:
+            plot_update_time = time()
+            plot_times.append(time() - plot_begin_time)
+            plot_speeds.append(speed_km_h)
+            plot_differences.append(altitude_difference)
+
     # Отрисовка автомобиля
-    blit_rotate(screen, trueno, (player.position.x + camera.position.x, player.position.y + camera.position.y),
+    functions.blit_rotate(screen, trueno, (player.position.x + camera.position.x, player.position.y + camera.position.y),
                 (29, 76), player.position.angle)
 
     # Отрисовка и запись пройденного пути
@@ -578,17 +554,17 @@ while runGame:
 
     is_crash = False
     front_corner_l = linalg.POINT(
-        player.position.x + (75 * math.cos(to_radians(player.position.angle + 20))),
-        player.position.y + (75 * math.sin(to_radians(player.position.angle + 20))))
+        player.position.x + (75 * math.cos(math.radians(player.position.angle + 20))),
+        player.position.y + (75 * math.sin(math.radians(player.position.angle + 20))))
     front_corner_r = linalg.POINT(
-        player.position.x + (75 * math.cos(to_radians(player.position.angle - 20))),
-        player.position.y + (75 * math.sin(to_radians(player.position.angle - 20))))
+        player.position.x + (75 * math.cos(math.radians(player.position.angle - 20))),
+        player.position.y + (75 * math.sin(math.radians(player.position.angle - 20))))
     rear_corner_l = linalg.POINT(
-        player.position.x + (75 * math.cos(to_radians(player.position.angle + 160))),
-        player.position.y + (75 * math.sin(to_radians(player.position.angle + 160))))
+        player.position.x + (75 * math.cos(math.radians(player.position.angle + 160))),
+        player.position.y + (75 * math.sin(math.radians(player.position.angle + 160))))
     rear_corner_r = linalg.POINT(
-        player.position.x + (75 * math.cos(to_radians(player.position.angle - 160))),
-        player.position.y + (75 * math.sin(to_radians(player.position.angle - 160))))
+        player.position.x + (75 * math.cos(math.radians(player.position.angle - 160))),
+        player.position.y + (75 * math.sin(math.radians(player.position.angle - 160))))
 
     # отрисовка вектора направления
     pygame.draw.line(screen, pygame.Color(0, 255, 0),
@@ -610,8 +586,8 @@ while runGame:
     # Отрисовка линий путей
     if show_lines == 1 or show_lines == 2:
 
-        angle_vector = linalg.VECTOR2(math.cos(to_radians(player.position.angle)) * 10 * (1 / 2),
-                                      math.sin(to_radians(player.position.angle)) * 10 * (1 / 2))
+        angle_vector = linalg.VECTOR2(math.cos(math.radians(player.position.angle)) * 10 * (1 / 2),
+                                      math.sin(math.radians(player.position.angle)) * 10 * (1 / 2))
 
         # отрисовка низкодискретизированного пути
         if len(destinations) > 0:
@@ -665,7 +641,7 @@ while runGame:
             is_crash = True
 
         if is_crash:
-            player = PLAYER(linalg.POINT(300, 300, 0), 0)
+            player = structures.PLAYER(linalg.POINT(300, 300, 0), 0)
 
     pygame.display.update()
 
