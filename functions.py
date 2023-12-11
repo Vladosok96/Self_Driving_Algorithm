@@ -50,3 +50,9 @@ def custom_random_choice(a, size=None, replace=True, p=None):
     else:
         return a[indices[0]]
 
+
+def float_array_to_str(arr):
+    out = ''
+    for element in arr:
+        out += f'{element:.2f}, '
+    return out

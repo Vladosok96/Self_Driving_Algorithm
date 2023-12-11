@@ -12,6 +12,7 @@ import ReedsShepp
 import qlearning
 import linalg
 import bumpmap
+import functions
 
 
 class CAMERA:
@@ -97,17 +98,16 @@ high_destinations = []
 is_achieved = True
 is_reverse = False
 destination = linalg.POINT(0, 0, 0)
-departure = linalg.POINT(0, 0, 0)
 destination_angle = 0
 current_vector_point = None     # Start direction vector
 current_wall_point = None       # Wall first point
 points_buffer = []
+pixel_by_meter = 36.3
 
-
-state_size = 8
+state_size = 9
 n_actions = 9
 batch_size = 32
-state = [0, 0, 0, 0, 0, 0, 0, 0]
+state = [0, 0, 0, 0, 0, 0, 0, 0, 0]
 n_observations = len(state)
 policy_net = qlearning.DQN(n_observations, n_actions).to(qlearning.device)
 target_net = qlearning.DQN(n_observations, n_actions).to(qlearning.device)
@@ -115,10 +115,9 @@ target_net.load_state_dict(policy_net.state_dict())
 optimizer = qlearning.optim.Adam(policy_net.parameters(), lr=qlearning.LR, amsgrad=True)
 memory = qlearning.ReplayMemory(10000)
 steps_done = 0
-total_reward = 0
 done = False
 counter = 0
-begining_position = linalg.POINT(0, 0, 0)
+beginning_position = linalg.POINT(0, 0, 0)
 fit_counter = 0
 episode_durations = []
 
@@ -134,9 +133,6 @@ def select_action(state):
     steps_done += 1
     if sample > eps_threshold:
         with torch.no_grad():
-            # t.max(1) will return the largest column value of each row.
-            # second column on max result is index of where max element was
-            # found, so we pick action with the larger expected reward.
             return policy_net(state).max(1).indices.view(1, 1)
     else:
         return torch.tensor([[random.randint(0, 8)]], device=qlearning.device, dtype=torch.long)
@@ -146,13 +142,7 @@ def optimize_model():
     if len(memory) < qlearning.BATCH_SIZE:
         return
     transitions = memory.sample(qlearning.BATCH_SIZE)
-    # Transpose the batch (see https://stackoverflow.com/a/19343/3343043 for
-    # detailed explanation). This converts batch-array of Transitions
-    # to Transition of batch-arrays.
     batch = qlearning.Transition(*zip(*transitions))
-
-    # Compute a mask of non-final states and concatenate the batch elements
-    # (a final state would've been the one after which simulation ended)
     non_final_mask = torch.tensor(tuple(map(lambda s: s is not None,
                                           batch.next_state)), device=qlearning.device, dtype=torch.bool)
     non_final_next_states = torch.cat([s for s in batch.next_state
@@ -161,30 +151,18 @@ def optimize_model():
     action_batch = torch.cat(batch.action)
     reward_batch = torch.cat(batch.reward)
 
-    # Compute Q(s_t, a) - the model computes Q(s_t), then we select the
-    # columns of actions taken. These are the actions which would've been taken
-    # for each batch state according to policy_net
     state_action_values = policy_net(state_batch).gather(1, action_batch)
 
-    # Compute V(s_{t+1}) for all next states.
-    # Expected values of actions for non_final_next_states are computed based
-    # on the "older" target_net; selecting their best reward with max(1).values
-    # This is merged based on the mask, such that we'll have either the expected
-    # state value or 0 in case the state was final.
     next_state_values = torch.zeros(qlearning.BATCH_SIZE, device=qlearning.device)
     with torch.no_grad():
         next_state_values[non_final_mask] = target_net(non_final_next_states).max(1).values
-    # Compute the expected Q values
     expected_state_action_values = (next_state_values * qlearning.GAMMA) + reward_batch
 
-    # Compute Huber loss
     criterion = qlearning.nn.SmoothL1Loss()
     loss = criterion(state_action_values, expected_state_action_values.unsqueeze(1))
 
-    # Optimize the model
     optimizer.zero_grad()
     loss.backward()
-    # In-place gradient clipping
     torch.nn.utils.clip_grad_value_(policy_net.parameters(), 100)
     optimizer.step()
 
@@ -327,7 +305,7 @@ while runGame:
 
     # Данные, относящиеся к Q-обучению
     reward = 0
-    next_state = [0, 0, 0, 0, 0, 0, 0, 0]
+    next_state = [0, 0, 0, 0, 0, 0, 0, 0, 0]
     out_of_way = False
 
     # Первая половина алгоритма машинного обучения
@@ -350,19 +328,19 @@ while runGame:
         # Проверка на сход с маршрута
         if linalg.VECTOR2(player.position.x - high_destinations[0].x,
                           player.position.y - high_destinations[0].y).get_length() > 20:
-            reward -= 1
+            reward -= 5
             out_of_way = True
 
         # Удаление достигнутых точек
         if len(destinations) > 0:
             while len(destinations) > 0 and linalg.VECTOR2(player.position.x - destinations[0].x, player.position.y - destinations[0].y).get_length() < 20:
                 destinations.pop(0)
-                begining_position = linalg.POINT(player.position.x, player.position.y, player.position.angle)
+                beginning_position = linalg.POINT(player.position.x, player.position.y, player.position.angle, player.position.direction)
+                reward += 5
         while not is_achieved and linalg.VECTOR2(player.position.x - high_destinations[0].x,
                                                  player.position.y - high_destinations[0].y).get_length() < 10:
             high_destinations.pop(0)
-            departure = linalg.POINT(player.position.x, player.position.y, 0)
-            reward += 0.5
+            reward += 0.5 * (player.vector.get_length() / 6)
             if len(high_destinations) == 0:
                 is_achieved = True
 
@@ -372,9 +350,7 @@ while runGame:
             if event.button == 1:
                 is_reverse = False
                 current_vector_point = linalg.POINT(pygame.mouse.get_pos()[0] - camera.position.x,
-                                                    pygame.mouse.get_pos()[1] - camera.position.y, direction = 1)
-
-                departure = linalg.POINT(player.position.x, player.position.y, 0)
+                                                    pygame.mouse.get_pos()[1] - camera.position.y, direction=1)
             if event.button == 2:
                 destinations.clear()
                 high_destinations.clear()
@@ -433,7 +409,7 @@ while runGame:
                 camera.is_down = True
 
             elif event.key == 120:
-                begining_position = linalg.POINT(player.position.x, player.position.y, player.position.angle)
+                beginning_position = linalg.POINT(player.position.x, player.position.y, player.position.angle, player.position.direction)
                 research_destinations()
 
         if event.type == pygame.KEYUP:
@@ -459,37 +435,30 @@ while runGame:
 
     # Применение событий для машины
     if not is_achieved:
-        destination_angle = control[0]
+        destination_angle = control[0] * 7
         player.velocity += control[1]
         player.velocity = min(5, max(-2, player.velocity))
-        if player.velocity >= 0:
-            player.steering_angle = destination_angle * 7
-        else:
-            player.steering_angle = -destination_angle * 7
+        if player.steering_angle < destination_angle:
+            player.steering_angle += 0.5
+        elif player.steering_angle > destination_angle:
+            player.steering_angle -= 0.5
     else:
         if player.is_w:
-            if player.velocity < 5:
-                player.velocity += 0.5
+            if player.velocity < 10:
+                player.velocity += 0.2
         elif player.is_s:
-            if player.velocity > -2:
+            if player.velocity > -3:
                 player.velocity -= 0.5
-        elif player.velocity > 0.5:
-            player.velocity -= 0.5
-        elif player.velocity < 0:
-            player.velocity += 0.5
-        if player.velocity >= 0:
-            if player.is_a:
-                player.steering_angle += -0.5
-            if player.is_d:
-                player.steering_angle += 0.5
-        else:
-            if player.is_a:
-                player.steering_angle += 0.5
-            if player.is_d:
-                player.steering_angle += -0.5
-        # player.steering_angle = 0
+        elif player.velocity >= 0.2:
+            player.velocity -= 0.2
+        elif player.velocity <= -0.2:
+            player.velocity += 0.2
+        if player.is_a:
+            player.steering_angle += -0.5
+        if player.is_d:
+            player.steering_angle += 0.5
     player.steering_angle = max(min(player.steering_angle, 7), -7)
-    player.velocity = min(7, max(-3, player.velocity))
+    player.velocity = min(20, max(-10, player.velocity))
 
     # Рассчет высот
     player_altitude = 0
@@ -500,7 +469,7 @@ while runGame:
         player_altitude = bump_map.get_color(player.position.x, player.position.y)
     if 0 < next_position.x < bump_map.width and 0 < next_position.y < bump_map.height:
         next_altitude = bump_map.get_color(next_position.x, next_position.y)
-    altitude_difference = 1 - ((next_altitude - player_altitude) / 10)
+    altitude_difference = (next_altitude - player_altitude) / 10
 
     # Применение событий для камеры
     if camera.is_left:
@@ -513,12 +482,16 @@ while runGame:
         camera.position.y -= 20
 
     # перемещение
-    player.position.angle = solve_angle(player.position.angle,
-                                        player.steering_angle * (player.vector.get_length() / 10))
+    if player.velocity >= 0:
+        player.position.angle = solve_angle(player.position.angle,
+                                            player.steering_angle * (player.vector.get_length() / 10))
+    else:
+        player.position.angle = solve_angle(player.position.angle,
+                                            -player.steering_angle * (player.vector.get_length() / 10))
 
     direction_vector = linalg.VECTOR2(math.cos(to_radians(player.position.angle)) * player.velocity * (1 / 2),
                                       math.sin(to_radians(player.position.angle)) * player.velocity * (1 / 2))
-    direction_vector = direction_vector.mult(altitude_difference)
+    direction_vector = direction_vector.mult(1 - altitude_difference)
     player.vector.median(direction_vector.x, direction_vector.y, 0.7)
 
     player.position.x += player.vector.x
@@ -534,10 +507,13 @@ while runGame:
         player.steering_angle += 0.1
 
     # Вторая половина части с машинным обучением:
+    next_state[6] = player.vector.get_length() / 5
+    next_state[7] = player.steering_angle / 10
+    next_state[8] = altitude_difference
+    next_state_str = functions.float_array_to_str(next_state)
+    reward_str = str(reward)
     if not is_achieved:
         # Рассчет следующего состояния
-        next_state[6] = player.vector.get_length() / 5
-        next_state[7] = player.steering_angle / 10
 
         next_state = torch.tensor(next_state, dtype=torch.float32, device=qlearning.device).unsqueeze(0)
         reward = torch.tensor([reward], device=qlearning.device)
@@ -555,17 +531,18 @@ while runGame:
         target_net.load_state_dict(target_net_state_dict)
 
         if out_of_way:
-            player.position = linalg.POINT(begining_position.x, begining_position.y, begining_position.angle)
+            player.position = linalg.POINT(beginning_position.x, beginning_position.y, beginning_position.angle, beginning_position.direction)
             player.vector = linalg.VECTOR2(0, 0)
             player.velocity = 0
+            player.steering_angle = 0
             research_destinations()
 
     # Вывод информации в виде текста:
     #   - Алгоритм обучения
-    text_revard = sysfont.render(f'reward: {reward}', False, (0, 0, 0))
+    text_reward = sysfont.render(f'reward: {reward_str}', False, (0, 0, 0))
     text_action = sysfont.render(f'action: {str(control)}', False, (0, 0, 0))
-    text_states = sysfont.render(f'states: {str(state)}', False, (0, 0, 0))
-    screen.blit(text_revard, (10, 0))
+    text_states = sysfont.render(f'states: {str(next_state_str)}', False, (0, 0, 0))
+    screen.blit(text_reward, (10, 0))
     screen.blit(text_action, (10, 20))
     screen.blit(text_states, (10, 40))
     #   - Карта высот
@@ -575,6 +552,10 @@ while runGame:
     screen.blit(text_current_altitude, (size[0] - 140, 0))
     screen.blit(text_next_altitude, (size[0] - 140, 20))
     screen.blit(text_altitude_difference, (size[0] - 140, 40))
+    #   - Одометрия
+    speed_km_h = player.vector.get_length() * fps / pixel_by_meter * 3.6
+    text_speed = sysfont.render(f'speed: {speed_km_h:.2f} km/h [{player.vector.get_length():.2f}]', False, (0, 0, 0))
+    screen.blit(text_speed, (10, size[1] - 30))
 
     # Отрисовка автомобиля
     blit_rotate(screen, trueno, (player.position.x + camera.position.x, player.position.y + camera.position.y),
@@ -590,6 +571,7 @@ while runGame:
         pygame.draw.line(screen, pygame.Color(255, 0, 255), [way[i - 1].x + camera.position.x, way[i - 1].y + camera.position.y],
                          [way[i].x + camera.position.x, way[i].y + camera.position.y], 2)
 
+    # Отрисовка стен
     for wall in walls:
         pygame.draw.line(screen, pygame.Color(255, 0, 0), [wall.x1 + camera.position.x, wall.y1 + camera.position.y],
                          [wall.x2 + camera.position.x, wall.y2 + camera.position.y], 2)
@@ -643,8 +625,6 @@ while runGame:
                                   destinations[destination_iterator].y + camera.position.y],
                                  [destinations[destination_iterator - 1].x + camera.position.x,
                                   destinations[destination_iterator - 1].y + camera.position.y], 3)
-            while len(destinations) > 0 and linalg.VECTOR2(player.position.x - destinations[0].x, player.position.y - destinations[0].y).get_length() < 20:
-                destinations.pop(0)
 
         # отрисовка высокодискретизированного пути
         if len(high_destinations) > 0:
