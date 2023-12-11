@@ -319,6 +319,9 @@ state = torch.tensor(state, dtype=torch.float32, device=qlearning.device).unsque
 
 # отрисовка
 while runGame:
+    # Обновление экрана
+    screen.fill((200, 200, 200))
+    bump_map.draw_normals_map(screen, camera.position.x, camera.position.y)
 
     points_buffer.clear()
 
@@ -327,11 +330,10 @@ while runGame:
     next_state = [0, 0, 0, 0, 0, 0, 0, 0]
     out_of_way = False
 
+    # Первая половина алгоритма машинного обучения
     action = select_action(state)
     control = num_control(action)
-
     if len(high_destinations) > 0 and not is_achieved:
-
         # Рассчет векторов до точек
         if len(high_destinations) > 0:
             for i in range(3):
@@ -466,9 +468,11 @@ while runGame:
             player.steering_angle = -destination_angle * 7
     else:
         if player.is_w:
-            player.velocity += 0.5
+            if player.velocity < 5:
+                player.velocity += 0.5
         elif player.is_s:
-            player.velocity -= 0.5
+            if player.velocity > -2:
+                player.velocity -= 0.5
         elif player.velocity > 0.5:
             player.velocity -= 0.5
         elif player.velocity < 0:
@@ -485,7 +489,18 @@ while runGame:
                 player.steering_angle += -0.5
         # player.steering_angle = 0
     player.steering_angle = max(min(player.steering_angle, 7), -7)
-    player.velocity = min(5, max(-2, player.velocity))
+    player.velocity = min(7, max(-3, player.velocity))
+
+    # Рассчет высот
+    player_altitude = 0
+    next_altitude = 0
+    next_altitude_offset = linalg.VECTOR2(10 * math.cos(math.radians(player.position.angle - 90)), 10 * math.sin(math.radians(player.position.angle - 90)))
+    next_position = player.position.add(next_altitude_offset)
+    if 0 < player.position.x < bump_map.width and 0 < player.position.y < bump_map.height:
+        player_altitude = bump_map.get_color(player.position.x, player.position.y)
+    if 0 < next_position.x < bump_map.width and 0 < next_position.y < bump_map.height:
+        next_altitude = bump_map.get_color(next_position.x, next_position.y)
+    altitude_difference = 1 - ((next_altitude - player_altitude) / 10)
 
     # Применение событий для камеры
     if camera.is_left:
@@ -498,12 +513,12 @@ while runGame:
         camera.position.y -= 20
 
     # перемещение
-
     player.position.angle = solve_angle(player.position.angle,
                                         player.steering_angle * (player.vector.get_length() / 10))
 
     direction_vector = linalg.VECTOR2(math.cos(to_radians(player.position.angle)) * player.velocity * (1 / 2),
                                       math.sin(to_radians(player.position.angle)) * player.velocity * (1 / 2))
+    direction_vector = direction_vector.mult(altitude_difference)
     player.vector.median(direction_vector.x, direction_vector.y, 0.7)
 
     player.position.x += player.vector.x
@@ -545,34 +560,28 @@ while runGame:
             player.velocity = 0
             research_destinations()
 
-    screen.fill((200, 200, 200))
-    bump_map.draw_normals_map(screen, camera.position.x, camera.position.y)
-
-    # Вывод информации в виде текста
+    # Вывод информации в виде текста:
+    #   - Алгоритм обучения
     text_revard = sysfont.render(f'reward: {reward}', False, (0, 0, 0))
     text_action = sysfont.render(f'action: {str(control)}', False, (0, 0, 0))
     text_states = sysfont.render(f'states: {str(state)}', False, (0, 0, 0))
-    screen.blit(text_revard, (0, 0))
-    screen.blit(text_action, (0, 20))
-    screen.blit(text_states, (0, 40))
+    screen.blit(text_revard, (10, 0))
+    screen.blit(text_action, (10, 20))
+    screen.blit(text_states, (10, 40))
+    #   - Карта высот
+    text_current_altitude = sysfont.render(f'current alt: {player_altitude:.2f}', False, (0, 0, 0))
+    text_next_altitude = sysfont.render(f'next alt: {next_altitude:.2f}', False, (0, 0, 0))
+    text_altitude_difference = sysfont.render(f'alt diff: {altitude_difference:.2f}', False, (0, 0, 0))
+    screen.blit(text_current_altitude, (size[0] - 140, 0))
+    screen.blit(text_next_altitude, (size[0] - 140, 20))
+    screen.blit(text_altitude_difference, (size[0] - 140, 40))
 
+    # Отрисовка автомобиля
     blit_rotate(screen, trueno, (player.position.x + camera.position.x, player.position.y + camera.position.y),
                 (29, 76), player.position.angle)
 
-    point_front = linalg.POINT(player.position.x + math.cos(to_radians(player.position.angle)) * 1000,
-                               player.position.y + math.sin(to_radians(player.position.angle)) * 1000)
-    point_half_left = linalg.POINT(player.position.x + math.cos(to_radians(player.position.angle + 35)) * 1000,
-                                   player.position.y + math.sin(to_radians(player.position.angle + 35)) * 1000)
-
-    point_half_right = linalg.POINT(player.position.x + math.cos(to_radians(player.position.angle - 35)) * 1000,
-                                    player.position.y + math.sin(to_radians(player.position.angle - 35)) * 1000)
-    point_left = linalg.POINT(player.position.x + math.cos(to_radians(player.position.angle + 90)) * 1000,
-                              player.position.y + math.sin(to_radians(player.position.angle + 90)) * 1000)
-
-    point_right = linalg.POINT(player.position.x + math.cos(to_radians(player.position.angle - 90)) * 1000,
-                               player.position.y + math.sin(to_radians(player.position.angle - 90)) * 1000)
-
-    if (time() - last_add_way > 0.1):
+    # Отрисовка и запись пройденного пути
+    if time() - last_add_way > 0.1:
         way.append(linalg.POINT(player.position.x, player.position.y))
         last_add_way = time()
         if len(way) > 2000:
@@ -584,44 +593,6 @@ while runGame:
     for wall in walls:
         pygame.draw.line(screen, pygame.Color(255, 0, 0), [wall.x1 + camera.position.x, wall.y1 + camera.position.y],
                          [wall.x2 + camera.position.x, wall.y2 + camera.position.y], 2)
-
-        point_front = wall.intersection(player.position.x, player.position.y,
-                                        point_front.x, point_front.y)
-        point_half_left = wall.intersection(player.position.x, player.position.y,
-                                            point_half_left.x, point_half_left.y)
-        point_half_right = wall.intersection(player.position.x, player.position.y,
-                                             point_half_right.x, point_half_right.y)
-        point_left = wall.intersection(player.position.x, player.position.y,
-                                       point_left.x, point_left.y)
-        point_right = wall.intersection(player.position.x, player.position.y,
-                                        point_right.x, point_right.y)
-
-    if show_lines == 0 or show_lines == 2:
-        pygame.draw.line(screen, pygame.Color(0, 0, 255),
-                         [player.position.x + camera.position.x, player.position.y + camera.position.y],
-                         [point_front.x + camera.position.x, point_front.y + camera.position.y], 2)
-        pygame.draw.circle(screen, pygame.Color(0, 0, 0),
-                           (point_front.x + camera.position.x, point_front.y + camera.position.y), 5.0)
-        pygame.draw.line(screen, pygame.Color(0, 0, 255),
-                         [player.position.x + camera.position.x, player.position.y + camera.position.y],
-                         [point_half_left.x + camera.position.x, point_half_left.y + camera.position.y], 2)
-        pygame.draw.circle(screen, pygame.Color(0, 0, 0),
-                           (point_half_left.x + camera.position.x, point_half_left.y + camera.position.y), 5.0)
-        pygame.draw.line(screen, pygame.Color(0, 0, 255),
-                         [player.position.x + camera.position.x, player.position.y + camera.position.y],
-                         [point_half_right.x + camera.position.x, point_half_right.y + camera.position.y], 2)
-        pygame.draw.circle(screen, pygame.Color(0, 0, 0),
-                           (point_half_right.x + camera.position.x, point_half_right.y + camera.position.y), 5.0)
-        pygame.draw.line(screen, pygame.Color(0, 0, 255),
-                         [player.position.x + camera.position.x, player.position.y + camera.position.y],
-                         [point_left.x + camera.position.x, point_left.y + camera.position.y], 2)
-        pygame.draw.circle(screen, pygame.Color(0, 0, 0),
-                           (point_left.x + camera.position.x, point_left.y + camera.position.y), 5.0)
-        pygame.draw.line(screen, pygame.Color(0, 0, 255),
-                         [player.position.x + camera.position.x, player.position.y + camera.position.y],
-                         [point_right.x + camera.position.x, point_right.y + camera.position.y], 2)
-        pygame.draw.circle(screen, pygame.Color(0, 0, 0),
-                           (point_right.x + camera.position.x, point_right.y + camera.position.y), 5.0)
 
     is_crash = False
     front_corner_l = linalg.POINT(
@@ -637,14 +608,17 @@ while runGame:
         player.position.x + (75 * math.cos(to_radians(player.position.angle - 160))),
         player.position.y + (75 * math.sin(to_radians(player.position.angle - 160))))
 
-    # отрисовка "векторов" направлений
+    # отрисовка вектора направления
+    pygame.draw.line(screen, pygame.Color(0, 255, 0),
+                     [player.position.x + camera.position.x, player.position.y + camera.position.y],
+                     [player.position.x + camera.position.x + next_altitude_offset.x, player.position.y + camera.position.y + next_altitude_offset.y], 2)
 
+    # Отрисовка линий редакторов карты
     if current_vector_point != None:
         pygame.draw.line(screen, pygame.Color(255, 255, 0),
                          [current_vector_point.x + camera.position.x, current_vector_point.y + camera.position.y],
                          [pygame.mouse.get_pos()[0],
                           pygame.mouse.get_pos()[1]], 3)
-
     if current_wall_point != None:
         pygame.draw.line(screen, pygame.Color(0, 255, 100),
                          [current_wall_point.x + camera.position.x, current_wall_point.y + camera.position.y],

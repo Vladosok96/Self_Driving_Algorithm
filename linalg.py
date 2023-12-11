@@ -28,6 +28,9 @@ class POINT:
         self.angle = angle
         self.direction = direction
 
+    def add(self, element):
+        return POINT(self.x + element.x, self.y + element.y, self.angle, self.direction)
+
     def __repr__(self):
         return f"x:{self.x}, y:{self.y}, a:{self.angle}, d:{self.direction}"
 
