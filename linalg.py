@@ -139,3 +139,20 @@ def solve_angle(angle, add):
     angle += add
     angle %= 360
     return angle
+
+
+def angle_difference(angle1, angle2):
+    # Приведение углов к интервалу от 0 до 360 градусов
+    angle1 = angle1 % 360
+    angle2 = angle2 % 360
+
+    # Вычисление разности углов
+    diff = angle1 - angle2
+
+    # Приведение разности к интервалу от -180 до 180 градусов
+    if diff > 180:
+        diff -= 360
+    elif diff < -180:
+        diff += 360
+
+    return diff

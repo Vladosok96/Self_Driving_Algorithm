@@ -43,10 +43,12 @@ high_destinations = []
 is_achieved = True
 is_reverse = False
 destination_angle = 0
-current_vector_point = None     # Start direction vector
-current_wall_point = None       # Wall first point
+current_vector_point = None
+current_wall_point = None
 points_buffer = []
 pixel_by_meter = 36.3
+difference_angle = 0
+next_point_angle = 0
 
 # Параметры q-обучения
 state_size = 9
@@ -63,8 +65,10 @@ steps_done = 0
 done = False
 counter = 0
 beginning_position = linalg.POINT(0, 0, 0)
+beginning_destinations = []
 fit_counter = 0
 episode_durations = []
+is_learning = False
 
 # Карта высот
 bump_map = bumpmap.BumpMap(width=2048, height=2048)
@@ -200,7 +204,7 @@ layout = [
     [sg.Text('Алгоритм следования')],
     [sg.Text('Соотношение значимости'), sg.Slider(orientation='h', range=(0, 1), resolution=0.05, default_value=0.5)],
     [sg.Text('Коэффициент руления'), sg.InputText(default_text=STEERING_CF)],
-    [sg.Text('Дальность второй точки'), sg.Slider(orientation='h', range=(2, 50), resolution=1, default_value=NEXT_POINT_INTERVAL)],
+    [sg.Text('Дальность второй точки'), sg.Slider(orientation='h', range=(2, 150), resolution=1, default_value=NEXT_POINT_INTERVAL)],
     [sg.HorizontalSeparator()],
     [sg.Text('Алгоритм построения пути')],
     [sg.Text('Минимальный радиус'), sg.InputText(default_text=ReedsShepp.max_c)],
@@ -209,8 +213,9 @@ layout = [
     [sg.HorizontalSeparator()],
     [sg.Button('Начало графика', key='-begin_plot-'), sg.Button('Конец графика', key='-end_plot-')],
     [sg.HorizontalSeparator()],
-    [sg.SaveAs('Сохранить нейросеть', key='-save_net-', change_submits=True)],
-    [sg.FileBrowse('Загрузить нейросеть', key='-load_net-')]
+    [sg.Button('Включить обучение', key='-learning_switch-')],
+    [sg.SaveAs('Сохранить нейросеть', key='-save_net-', file_types=(("Self driving model Files", "*.model"),), change_submits=True)],
+    [sg.FileBrowse('Загрузить нейросеть', key='-load_net-', file_types=(("Self driving model Files", "*.model"),), change_submits=True)]
 ]
 
 
@@ -227,12 +232,14 @@ def CAD_window():
     global plot_times
     global policy_net
     global target_net
+    global optimizer
+    global is_learning
 
     window = sg.Window('Средство проектирования БПТС', layout)
     last_update = {0: '0', 1: '0', 3: '0', 4: '0', 5: '0', 7: '0', 8: '0'}
 
     while runGame:
-        event, values = window.read(timeout=20000)
+        event, values = window.read(timeout=500)
         if event == sg.WIN_CLOSED or event == 'Cancel':  # if user closes window or clicks cancel
             runGame = False
             break
@@ -248,16 +255,36 @@ def CAD_window():
             plot_state = 0
             fig, axs = plt.subplots(3)
             axs[0].plot(plot_times, plot_speeds)
+            axs[0].set_title('График скорости автомобиля')
+            axs[0].set_ylabel('Км/ч')
+            axs[0].set_xlabel('с')
             axs[1].plot(plot_times, plot_differences)
+            axs[1].set_title('График перепада высоты рельефа')
+            axs[1].set_ylabel('tg()')
+            axs[1].set_xlabel('с')
             axs[2].plot(plot_times, plot_angles)
+            axs[2].set_title('График отклонения курса автомобиля от маршрута')
+            axs[2].set_ylabel('Угол°')
+            axs[2].set_xlabel('с')
             plt.show()
+        if event == '-learning_switch-':
+            if is_learning:
+                window['-learning_switch-'].update('Включить обучение')
+                is_learning = False
+            else:
+                window['-learning_switch-'].update('Выключить обучение')
+                is_learning = True
         if event == '-save_net-':
-            with open(values['-save_net-'], 'w') as file:
-                torch.save(policy_net.state_dict(), file)
-            with open(values['-save_net-'] + 'target', 'w') as file:
-                torch.save(target_net.state_dict(), file)
+            torch.save({
+                'polici_net': policy_net.state_dict(),
+                'target_net': target_net.state_dict(),
+                'optimizer': optimizer.state_dict()
+            }, values['-save_net-'])
         if event == '-load_net-':
-            pass
+            checkpoint = torch.load(values['-load_net-'])
+            policy_net.load_state_dict(checkpoint['polici_net'])
+            target_net.load_state_dict(checkpoint['target_net'])
+            optimizer.load_state_dict(checkpoint['optimizer'])
 
         FIRST_POINT_CF = float(values[3])
         try:
@@ -303,7 +330,7 @@ while runGame:
     # Первая половина алгоритма машинного обучения
     action = select_action(state)
     control = num_control(action)
-    if len(high_destinations) > 0 and not is_achieved:
+    if len(high_destinations) > 0:
         # Рассчет векторов до точек
         if len(high_destinations) > 0:
             for i in range(3):
@@ -312,7 +339,7 @@ while runGame:
                                               high_destinations[calulate_offset].y - player.position.y) \
                     .rotate(math.radians(-player.position.angle + 90))
                 points_buffer.append(linalg.POINT(high_destinations[calulate_offset].x, high_destinations[calulate_offset].y))
-                next_state[2 * i] = point_vector.x / (100 * (i + 1))
+                next_state[2 * i] = point_vector.x / (NEXT_POINT_INTERVAL * 2 * (i + 1))
                 next_state[2 * i + 1] = - point_vector.y / (100 * (i + 1))
 
         done = False
@@ -327,7 +354,6 @@ while runGame:
         if len(destinations) > 0:
             while len(destinations) > 0 and linalg.VECTOR2(player.position.x - destinations[0].x, player.position.y - destinations[0].y).get_length() < 20:
                 destinations.pop(0)
-                beginning_position = linalg.POINT(player.position.x, player.position.y, player.position.angle, player.position.direction)
                 reward += 5
         while not is_achieved and linalg.VECTOR2(player.position.x - high_destinations[0].x,
                                                  player.position.y - high_destinations[0].y).get_length() < 10:
@@ -402,6 +428,7 @@ while runGame:
 
             elif event.key == 120:
                 beginning_position = linalg.POINT(player.position.x, player.position.y, player.position.angle, player.position.direction)
+                beginning_destinations = destinations.copy()
                 research_destinations()
 
         if event.type == pygame.KEYUP:
@@ -428,8 +455,8 @@ while runGame:
     # Применение событий для машины
     if not is_achieved:
         destination_angle = control[0] * 7
-        player.velocity += control[1]
-        player.velocity = min(5, max(-2, player.velocity))
+        player.velocity += control[1] / 5
+        player.velocity = min(10, max(-3, player.velocity))
         if player.steering_angle < destination_angle:
             player.steering_angle += 0.5
         elif player.steering_angle > destination_angle:
@@ -445,6 +472,8 @@ while runGame:
             player.velocity -= 0.2
         elif player.velocity <= -0.2:
             player.velocity += 0.2
+        else:
+            player.velocity = 0
         if player.is_a:
             player.steering_angle += -0.5
         if player.is_d:
@@ -514,20 +543,30 @@ while runGame:
         memory.push(state, action, next_state, reward)
         state = next_state
 
-        optimize_model()
+        if is_learning:
+            optimize_model()
 
-        target_net_state_dict = target_net.state_dict()
-        policy_net_state_dict = policy_net.state_dict()
-        for key in policy_net_state_dict:
-            target_net_state_dict[key] = policy_net_state_dict[key] * qlearning.TAU + target_net_state_dict[key] * (1 - qlearning.TAU)
-        target_net.load_state_dict(target_net_state_dict)
+            target_net_state_dict = target_net.state_dict()
+            policy_net_state_dict = policy_net.state_dict()
+            for key in policy_net_state_dict:
+                target_net_state_dict[key] = policy_net_state_dict[key] * qlearning.TAU + target_net_state_dict[key] * (1 - qlearning.TAU)
+            target_net.load_state_dict(target_net_state_dict)
 
         if out_of_way:
             player.position = linalg.POINT(beginning_position.x, beginning_position.y, beginning_position.angle, beginning_position.direction)
+            destinations = beginning_destinations.copy()
             player.vector = linalg.VECTOR2(0, 0)
             player.velocity = 0
             player.steering_angle = 0
             research_destinations()
+
+    # Рассчет угла отклонения от траектории
+    if len(high_destinations) > NEXT_POINT_INTERVAL:
+        next_point_angle = (math.degrees(high_destinations[NEXT_POINT_INTERVAL].angle) - 206) % 360
+        difference_angle = linalg.angle_difference(player.position.angle, next_point_angle)
+    else:
+        difference_angle = 0
+        next_point_angle = 0
 
     # Вывод информации в виде текста:
     #   - Алгоритм обучения
@@ -547,7 +586,13 @@ while runGame:
     #   - Одометрия
     speed_km_h = player.vector.get_length() * fps / pixel_by_meter * 3.6
     text_speed = sysfont.render(f'speed: {speed_km_h:.2f} km/h [{player.vector.get_length():.2f}]', False, (0, 0, 0))
+    text_difference = sysfont.render(f'difference: {difference_angle:.2f}', False, (0, 0, 0))
+    text_yaw = sysfont.render(f'yaw: {player.position.angle:.2f}', False, (0, 0, 0))
+    text_next_angle = sysfont.render(f'next angle: {next_point_angle:.2f}', False, (0, 0, 0))
     screen.blit(text_speed, (10, size[1] - 30))
+    screen.blit(text_difference, (10, size[1] - 50))
+    screen.blit(text_yaw, (10, size[1] - 70))
+    screen.blit(text_next_angle, (10, size[1] - 90))
 
     # Запись данных в графике
     if plot_state == 1:
@@ -555,10 +600,7 @@ while runGame:
             plot_update_time = time()
             plot_times.append(time() - plot_begin_time)
             plot_speeds.append(speed_km_h)
-            if len(high_destinations) > NEXT_POINT_INTERVAL:
-                plot_angles.append(player.position.angle - high_destinations[NEXT_POINT_INTERVAL].angle)
-            else:
-                plot_angles.append(0)
+            plot_angles.append(difference_angle)
             plot_differences.append(altitude_difference)
 
     # Отрисовка автомобиля
