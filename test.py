@@ -24,7 +24,7 @@ obstacle_radius = 15  # Радиус препятствия
 
 
 # Функция для генерации карты нормалей с использованием перлинового шума
-def generate_normals_map(scale=0.009, octaves=6, persistence=0.1, lacunarity=2.0):
+def generate_normals_map(scale=0.009, octaves=6, persistence=0.6, lacunarity=2.0):
     return [[noise.pnoise2(x * scale, y * scale, octaves=octaves, persistence=persistence, lacunarity=lacunarity)
              for x in range(WIDTH)] for y in range(HEIGHT)]
 

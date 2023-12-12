@@ -42,7 +42,6 @@ destinations = []
 high_destinations = []
 is_achieved = True
 is_reverse = False
-destination = linalg.POINT(0, 0, 0)
 destination_angle = 0
 current_vector_point = None     # Start direction vector
 current_wall_point = None       # Wall first point
@@ -73,6 +72,7 @@ bump_map = bumpmap.BumpMap(width=2048, height=2048)
 # Графики
 plot_speeds = []
 plot_differences = []
+plot_angles = []
 plot_times = []
 plot_state = 0
 plot_update_time = 0
@@ -192,21 +192,26 @@ def research_destinations():
 
 
 # Окно системы проектирования
-layout = [[sg.Text('Автомобиль')],
-          [sg.Text('Ширина'), sg.InputText(default_text=ReedsShepp.max_c)],
-          [sg.Text('Длина'), sg.InputText(default_text=ReedsShepp.max_c)],
-          [sg.HorizontalSeparator()],
-          [sg.Text('Алгоритм следования')],
-          [sg.Text('Соотношение значимости'), sg.Slider(orientation='h', range=(0, 1), resolution=0.05, default_value=0.5)],
-          [sg.Text('Коэффициент руления'), sg.InputText(default_text=STEERING_CF)],
-          [sg.Text('Дальность второй точки'), sg.Slider(orientation='h', range=(2, 50), resolution=1, default_value=NEXT_POINT_INTERVAL)],
-          [sg.HorizontalSeparator()],
-          [sg.Text('Алгоритм построения пути')],
-          [sg.Text('Минимальный радиус'), sg.InputText(default_text=ReedsShepp.max_c)],
-          [sg.Text('Шаг дискретизации'), sg.InputText(default_text=ReedsShepp.STEP_SIZE)],
-          [sg.Button('Ok'), sg.Button('Cancel')],
-          [sg.HorizontalSeparator()],
-          [sg.Button('Начало графика', key='-begin_plot-'), sg.Button('Конец графика', key='-end_plot-')]]
+layout = [
+    [sg.Text('Автомобиль')],
+    [sg.Text('Ширина'), sg.InputText(default_text=ReedsShepp.max_c)],
+    [sg.Text('Длина'), sg.InputText(default_text=ReedsShepp.max_c)],
+    [sg.HorizontalSeparator()],
+    [sg.Text('Алгоритм следования')],
+    [sg.Text('Соотношение значимости'), sg.Slider(orientation='h', range=(0, 1), resolution=0.05, default_value=0.5)],
+    [sg.Text('Коэффициент руления'), sg.InputText(default_text=STEERING_CF)],
+    [sg.Text('Дальность второй точки'), sg.Slider(orientation='h', range=(2, 50), resolution=1, default_value=NEXT_POINT_INTERVAL)],
+    [sg.HorizontalSeparator()],
+    [sg.Text('Алгоритм построения пути')],
+    [sg.Text('Минимальный радиус'), sg.InputText(default_text=ReedsShepp.max_c)],
+    [sg.Text('Шаг дискретизации'), sg.InputText(default_text=ReedsShepp.STEP_SIZE)],
+    [sg.Button('Ok'), sg.Button('Cancel')],
+    [sg.HorizontalSeparator()],
+    [sg.Button('Начало графика', key='-begin_plot-'), sg.Button('Конец графика', key='-end_plot-')],
+    [sg.HorizontalSeparator()],
+    [sg.SaveAs('Сохранить нейросеть', key='-save_net-', change_submits=True)],
+    [sg.FileBrowse('Загрузить нейросеть', key='-load_net-')]
+]
 
 
 def CAD_window():
@@ -216,11 +221,18 @@ def CAD_window():
     global NEXT_POINT_INTERVAL
     global plot_state
     global plot_begin_time
-    window = sg.Window('Система проектирования БПТС', layout)
+    global plot_speeds
+    global plot_differences
+    global plot_angles
+    global plot_times
+    global policy_net
+    global target_net
+
+    window = sg.Window('Средство проектирования БПТС', layout)
     last_update = {0: '0', 1: '0', 3: '0', 4: '0', 5: '0', 7: '0', 8: '0'}
 
     while runGame:
-        event, values = window.read(timeout=100)
+        event, values = window.read(timeout=20000)
         if event == sg.WIN_CLOSED or event == 'Cancel':  # if user closes window or clicks cancel
             runGame = False
             break
@@ -228,12 +240,24 @@ def CAD_window():
         if event == '-begin_plot-':
             plot_begin_time = time()
             plot_state = 1
+            plot_speeds = []
+            plot_differences = []
+            plot_angles = []
+            plot_times = []
         if event == '-end_plot-':
             plot_state = 0
-            fig, axs = plt.subplots(2)
+            fig, axs = plt.subplots(3)
             axs[0].plot(plot_times, plot_speeds)
             axs[1].plot(plot_times, plot_differences)
+            axs[2].plot(plot_times, plot_angles)
             plt.show()
+        if event == '-save_net-':
+            with open(values['-save_net-'], 'w') as file:
+                torch.save(policy_net.state_dict(), file)
+            with open(values['-save_net-'] + 'target', 'w') as file:
+                torch.save(target_net.state_dict(), file)
+        if event == '-load_net-':
+            pass
 
         FIRST_POINT_CF = float(values[3])
         try:
@@ -255,7 +279,7 @@ def CAD_window():
 
         if last_update[7] != values[7] or last_update[8] != values[8]:
             research_destinations()
-            last_update = values
+            last_update = values.copy()
 
 
 CAD_window_task = threading.Thread(target=CAD_window, args=())
@@ -527,10 +551,14 @@ while runGame:
 
     # Запись данных в графике
     if plot_state == 1:
-        if time() - plot_update_time > 0.2:
+        if time() - plot_update_time > 0.1:
             plot_update_time = time()
             plot_times.append(time() - plot_begin_time)
             plot_speeds.append(speed_km_h)
+            if len(high_destinations) > NEXT_POINT_INTERVAL:
+                plot_angles.append(player.position.angle - high_destinations[NEXT_POINT_INTERVAL].angle)
+            else:
+                plot_angles.append(0)
             plot_differences.append(altitude_difference)
 
     # Отрисовка автомобиля

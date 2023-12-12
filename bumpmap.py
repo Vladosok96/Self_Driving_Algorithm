@@ -8,7 +8,7 @@ class BumpMap:
     def __init__(self, width=800, height=800, scale=0.003, octaves=6, persistence=0.3, lacunarity=2.0):
         self.width = width
         self.height = height
-        self.normals_map = [[0 for i in range(width)] for j in range(height)]
+        self.bump_map = [[0 for i in range(width)] for j in range(height)]
 
         image_buffer = bytearray(height * width * 3)
         i = 0
@@ -19,7 +19,7 @@ class BumpMap:
                 image_buffer[i + 1] = int(color)
                 image_buffer[i + 2] = int(color)
                 i += 3
-                self.normals_map[y][x] = color
+                self.bump_map[y][x] = color
         self.image = pygame.image.frombuffer(image_buffer, (width, height), 'RGB')
         self.rect = self.image.get_rect()
 
@@ -28,4 +28,4 @@ class BumpMap:
         window.blit(self.image, (x, y))
 
     def get_color(self, x, y):
-        return self.normals_map[int(y)][int(x)]
+        return self.bump_map[int(y)][int(x)]
