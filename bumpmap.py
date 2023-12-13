@@ -5,7 +5,7 @@ import noise
 
 class BumpMap:
     # Функция для генерации карты нормалей с использованием перлинового шума
-    def __init__(self, width=800, height=800, scale=0.003, octaves=6, persistence=0.3, lacunarity=2.0):
+    def __init__(self, width=800, height=800, scale=0.001, octaves=6, persistence=0.3, lacunarity=2.0):
         self.width = width
         self.height = height
         self.bump_map = [[0 for i in range(width)] for j in range(height)]

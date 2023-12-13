@@ -49,6 +49,7 @@ points_buffer = []
 pixel_by_meter = 36.3
 difference_angle = 0
 next_point_angle = 0
+speed_km_h = 0
 
 # Параметры q-обучения
 state_size = 9
@@ -195,6 +196,13 @@ def research_destinations():
     high_destinations = high_destinations[15:]
 
 
+# Функция рассчета эффективности движения
+def engine_efficiency(speed, difference):
+    if difference < 0:
+        return (-0.0011) * speed * speed + 0.065 * speed
+    return (-0.0015) * speed * speed + 0.065 * speed
+
+
 # Окно системы проектирования
 layout = [
     [sg.Text('Автомобиль')],
@@ -259,8 +267,8 @@ def CAD_window():
             axs[0].set_ylabel('Км/ч')
             axs[0].set_xlabel('с')
             axs[1].plot(plot_times, plot_differences)
-            axs[1].set_title('График перепада высоты рельефа')
-            axs[1].set_ylabel('tg()')
+            axs[1].set_title('График высоты рельефа')
+            axs[1].set_ylabel('M')
             axs[1].set_xlabel('с')
             axs[2].plot(plot_times, plot_angles)
             axs[2].set_title('График отклонения курса автомобиля от маршрута')
@@ -358,7 +366,7 @@ while runGame:
         while not is_achieved and linalg.VECTOR2(player.position.x - high_destinations[0].x,
                                                  player.position.y - high_destinations[0].y).get_length() < 10:
             high_destinations.pop(0)
-            reward += 0.5 * (player.vector.get_length() / 6)
+            reward += 0.5 * engine_efficiency(speed_km_h, difference_angle)
             if len(high_destinations) == 0:
                 is_achieved = True
 
@@ -452,6 +460,16 @@ while runGame:
             elif event.key == 1073741905:
                 camera.is_down = False
 
+    # Применение событий для камеры
+    if camera.is_left:
+        camera.position.x += 20
+    if camera.is_right:
+        camera.position.x -= 20
+    if camera.is_up:
+        camera.position.y += 20
+    if camera.is_down:
+        camera.position.y -= 20
+
     # Применение событий для машины
     if not is_achieved:
         destination_angle = control[0] * 7
@@ -492,16 +510,6 @@ while runGame:
         next_altitude = bump_map.get_color(next_position.x, next_position.y)
     altitude_difference = (next_altitude - player_altitude) / 20
 
-    # Применение событий для камеры
-    if camera.is_left:
-        camera.position.x += 20
-    if camera.is_right:
-        camera.position.x -= 20
-    if camera.is_up:
-        camera.position.y += 20
-    if camera.is_down:
-        camera.position.y -= 20
-
     # перемещение
     if player.velocity >= 0:
         player.position.angle = linalg.solve_angle(player.position.angle,
@@ -513,7 +521,7 @@ while runGame:
     direction_vector = linalg.VECTOR2(math.cos(math.radians(player.position.angle - 90)) * player.velocity * (1 / 2),
                                       math.sin(math.radians(player.position.angle - 90)) * player.velocity * (1 / 2))
     direction_vector = direction_vector.mult(1 - altitude_difference)
-    player.vector.median(direction_vector.x, direction_vector.y, 0.7)
+    player.vector.median(direction_vector.x, direction_vector.y, 0.9)
 
     player.position.x += player.vector.x
     player.position.y += player.vector.y
@@ -589,10 +597,12 @@ while runGame:
     text_difference = sysfont.render(f'difference: {difference_angle:.2f}', False, (0, 0, 0))
     text_yaw = sysfont.render(f'yaw: {player.position.angle:.2f}', False, (0, 0, 0))
     text_next_angle = sysfont.render(f'next angle: {next_point_angle:.2f}', False, (0, 0, 0))
+    text_efficiency = sysfont.render(f'efficiency: {engine_efficiency(speed_km_h, altitude_difference):.2f}', False, (0, 0, 0))
     screen.blit(text_speed, (10, size[1] - 30))
     screen.blit(text_difference, (10, size[1] - 50))
     screen.blit(text_yaw, (10, size[1] - 70))
     screen.blit(text_next_angle, (10, size[1] - 90))
+    screen.blit(text_efficiency, (10, size[1] - 110))
 
     # Запись данных в графике
     if plot_state == 1:
@@ -601,7 +611,7 @@ while runGame:
             plot_times.append(time() - plot_begin_time)
             plot_speeds.append(speed_km_h)
             plot_angles.append(difference_angle)
-            plot_differences.append(altitude_difference)
+            plot_differences.append(player_altitude / 100)
 
     # Отрисовка автомобиля
     functions.blit_rotate(screen, trueno, (player.position.x + camera.position.x, player.position.y + camera.position.y),
