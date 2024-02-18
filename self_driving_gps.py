@@ -521,10 +521,11 @@ while runGame:
     player.position.x += player.vector.x
     player.position.y += player.vector.y
 
+    # синхронизация с реальным миром
     gps.read_data()
-    actual_gps_position = first_gps_position - GPS.gps_to_rect(gps.lon_dec, gps.lat_dec)
-    player.position.x = actual_gps_position[0]
-    player.position.y = actual_gps_position[1]
+    actual_gps_position = GPS.gps_to_rect(gps.lat_dec, gps.lon_dec)
+    player.position.x = first_gps_position[0] - actual_gps_position[0]
+    player.position.y = first_gps_position[1] - actual_gps_position[1]
 
     # притормаживание
     if player.velocity > 0:

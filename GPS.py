@@ -118,7 +118,7 @@ class GPSReader:
         self.read_data()
 
 
-def gps_to_rect(dLon, dLat):
+def gps_to_rect(dLat, dLon):
     # Номер зоны Гаусса-Крюгера
     zone = int(dLon / 6.0 + 1)
 
@@ -160,4 +160,4 @@ def gps_to_rect(dLon, dLat):
     N = I + II * (Lon - Lon0) ** 2 + III * (Lon - Lon0) ** 4 + IIIA * (Lon - Lon0) ** 6
     E = E0 + IV * (Lon - Lon0) + V * (Lon - Lon0) ** 3 + VI * (Lon - Lon0) ** 5
 
-    return N, E
+    return [E, N]
