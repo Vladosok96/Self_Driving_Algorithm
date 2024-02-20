@@ -52,9 +52,9 @@ next_point_angle = 0
 speed_km_h = 0
 
 # Позиционирование
-gps = GPS.GPSReader("/dev/ttyUSB0", 921600)
+gps = GPS.GPSReader("COM6", 3000000)
 gps.read_data()
-first_gps_position = GPS.gps_to_rect(gps.lon_dec, gps.lat_dec)
+first_gps_position = GPS.gps_to_rect(gps.lat_dec, gps.lon_dec)
 
 # Параметры q-обучения
 state_size = 9
@@ -524,8 +524,9 @@ while runGame:
     # синхронизация с реальным миром
     gps.read_data()
     actual_gps_position = GPS.gps_to_rect(gps.lat_dec, gps.lon_dec)
-    player.position.x = first_gps_position[0] - actual_gps_position[0]
-    player.position.y = first_gps_position[1] - actual_gps_position[1]
+    player.position.x = (first_gps_position[0] - actual_gps_position[0]) * 50
+    player.position.y = (first_gps_position[1] - actual_gps_position[1]) * 50
+    player.position.angle = gps.yaw
 
     # притормаживание
     if player.velocity > 0:
